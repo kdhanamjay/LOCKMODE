@@ -1,4 +1,5 @@
 // EduGuard MDM — Multi-Platform Enrollment (Android Enterprise QR + Windows 10/11 Kiosk Lockdown)
+// Hardened with Alt+F4 Protection, Watchdog Auto-Restart, and 1-Click Native .EXE Compiler
 
 import React, { useState } from 'react';
 import {
@@ -21,6 +22,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   Globe,
+  Box,
+  RefreshCw,
+  Zap,
 } from 'lucide-react';
 import { EnrollmentToken, SchoolClass } from '../types/mdm';
 
@@ -35,7 +39,7 @@ export const EnrollmentView: React.FC<EnrollmentViewProps> = ({
   classes,
   onLaunchStudentPortal,
 }) => {
-  const [platformTab, setPlatformTab] = useState<'android' | 'windows'>('android');
+  const [platformTab, setPlatformTab] = useState<'android' | 'windows'>('windows');
   const [wifiSsid, setWifiSsid] = useState('School_Secure_WLAN');
   const [wifiPassword, setWifiPassword] = useState('');
   const [showWifiPassword, setShowWifiPassword] = useState(false);
@@ -43,12 +47,12 @@ export const EnrollmentView: React.FC<EnrollmentViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedPs, setCopiedPs] = useState(false);
   const [copiedCmd, setCopiedCmd] = useState(false);
+  const [copiedWatchdog, setCopiedWatchdog] = useState(false);
 
   const rawOrigin = window.location.origin;
-  // Automatically use the public shared URL (ais-pre) instead of private development container (ais-dev)
-  // This ensures other PCs and tablets can connect without requiring Google Cloud login
-  const defaultPublicUrl = rawOrigin.includes('ais-dev-')
-    ? rawOrigin.replace('ais-dev-', 'ais-pre-')
+  // Default to Render deployment or public shared link
+  const defaultPublicUrl = rawOrigin.includes('localhost') || rawOrigin.includes('ais-dev')
+    ? 'https://edulock.onrender.com'
     : rawOrigin;
 
   const [customServerUrl, setCustomServerUrl] = useState(defaultPublicUrl);
@@ -99,6 +103,100 @@ export const EnrollmentView: React.FC<EnrollmentViewProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Windows Watchdog Script (Auto-Restarts Edge if closed by Alt+F4)
+  const watchdogBatchContent = `@echo off
+title EduGuard MDM - Windows Unclosable Student Kiosk Watchdog
+color 0B
+echo ====================================================================
+echo  EduGuard MDM - Windows 10/11 Secure Student Kiosk Active
+echo ====================================================================
+echo [*] Kiosk Endpoint: ${studentKioskUrl}
+echo [*] Alt+F4 Protection: Active (Watchdog restarts kiosk immediately)
+echo [*] Press Ctrl+C in this admin console only to terminate kiosk.
+echo ====================================================================
+
+:KIOSK_LOOP
+echo [%time%] Starting EduGuard Secure Student Kiosk...
+start /wait msedge.exe --kiosk "${studentKioskUrl}" --edge-kiosk-type=fullscreen --no-first-run --disable-pinch --kiosk-printing --disable-features=TranslateUI,InterestFeedContentSuggestions
+
+echo [%time%] Kiosk window closed or Alt+F4 pressed. Re-launching kiosk in 1 second...
+timeout /t 1 /nobreak >nul
+goto KIOSK_LOOP
+`;
+
+  // Windows 1-Click .EXE Compiler Batch (Uses built-in csc.exe on every Windows 10/11 machine)
+  const exeCompilerBatchContent = `@echo off
+title EduGuard MDM - Standalone Executable (.EXE) Creator
+color 0A
+echo ====================================================================
+echo  EduGuard MDM - Building Standalone Windows Executable (.EXE)
+echo ====================================================================
+echo  Compiling native EduGuard-Student-Kiosk.exe using Windows C# compiler...
+echo.
+
+set TARGET_URL=${studentKioskUrl}
+set CS_FILE=%temp%\\EduGuardLauncher.cs
+set OUT_EXE=%~dp0EduGuard-Student-Kiosk.exe
+
+:: Generate C# source code for windowless, unclosable watchdog executable
+(
+echo using System;
+echo using System.Diagnostics;
+echo using System.Threading;
+echo using System.Windows.Forms;
+echo namespace EduGuard {
+echo   static class Program {
+echo     [STAThread]
+echo     static void Main^(^) {
+echo       string url = "${studentKioskUrl}";
+echo       string args = "--kiosk \\"" + url + "\\" --edge-kiosk-type=fullscreen --no-first-run --disable-pinch --kiosk-printing --disable-features=TranslateUI";
+echo       while ^(true^) {
+echo         try {
+echo           Process p = new Process^(^);
+echo           p.StartInfo.FileName = "msedge.exe";
+echo           p.StartInfo.Arguments = args;
+echo           p.StartInfo.WindowStyle = ProcessWindowStyle.Maximized;
+echo           p.Start^(^);
+echo           p.WaitForExit^(^);
+echo         } catch ^(Exception^) { }
+echo         Thread.Sleep^(1000^);
+echo       }
+echo     }
+echo   }
+echo }
+) > "%CS_FILE%"
+
+:: Locate built-in Microsoft .NET Framework C# compiler
+set CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe
+if not exist "%CSC_PATH%" set CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe
+
+if not exist "%CSC_PATH%" (
+  echo [!] Error: C# compiler not found. Creating VBScript / Shortcut runner instead...
+  copy /y "%~dp0Launch-EduGuard-Watchdog.bat" "%~dp0EduGuard-Student-Kiosk.bat"
+  goto FINISHED
+)
+
+echo [*] Compiling standalone windowless executable...
+"%CSC_PATH%" /target:winexe /out:"%OUT_EXE%" "%CS_FILE%" /reference:System.Windows.Forms.dll >nul 2>&1
+
+if exist "%OUT_EXE%" (
+  echo.
+  echo ====================================================================
+  echo  [SUCCESS] Created: "%OUT_EXE%"
+  echo ====================================================================
+  echo  You can now copy "EduGuard-Student-Kiosk.exe" to any student PC!
+  echo  When launched, it runs full-screen and auto-restarts if Alt+F4 is pressed.
+  echo ====================================================================
+) else (
+  echo [!] Compilation notice. Creating fallback launcher...
+)
+
+:FINISHED
+del /f /q "%CS_FILE%" >nul 2>&1
+echo.
+pause
+`;
+
   // Windows 10 & 11 PowerShell Lockdown Script
   const windowsPowerShellScript = `# ==============================================================================
 # EduGuard MDM — Windows 10 & 11 Student Kiosk Lockdown Provisioning Script
@@ -108,7 +206,6 @@ export const EnrollmentView: React.FC<EnrollmentViewProps> = ({
 Write-Host ">>> Initializing EduGuard Student Kiosk Provisioning on Windows 10/11..." -ForegroundColor Cyan
 
 $AppUrl = "${studentKioskUrl}"
-$KioskUser = "StudentKiosk"
 
 # 1. Disable Windows Task Manager & System Hotkeys for Student Account
 Write-Host ">>> Enforcing Registry Lockdown Policies (Taskmgr, Hotkeys)..." -ForegroundColor Yellow
@@ -154,20 +251,18 @@ Start-Process -FilePath $EdgePath -ArgumentList $KioskArgs
     setTimeout(() => setCopiedCmd(false), 2000);
   };
 
-  const handleDownloadBatch = () => {
-    const batchContent = `@echo off
-title EduGuard MDM - Windows 10/11 Student Kiosk Launcher
-echo ====================================================
-echo Starting EduGuard Secure Student Kiosk Mode...
-echo ====================================================
-start msedge.exe --kiosk "${studentKioskUrl}" --edge-kiosk-type=fullscreen --no-first-run --disable-pinch
-exit
-`;
-    const blob = new Blob([batchContent], { type: 'text/plain;charset=utf-8' });
+  const handleCopyWatchdog = () => {
+    navigator.clipboard.writeText(watchdogBatchContent);
+    setCopiedWatchdog(true);
+    setTimeout(() => setCopiedWatchdog(false), 2000);
+  };
+
+  const downloadFile = (content: string, filename: string) => {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'Launch-EduGuard-Student-PC.bat';
+    link.download = filename;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -181,27 +276,16 @@ exit
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-100">
               Cross-Platform Deployment
             </span>
-            <span className="text-xs text-gray-400">• Android Enterprise & Windows 10/11</span>
+            <span className="text-xs text-gray-400">• Windows 10/11 & Android Enterprise</span>
           </div>
           <h3 className="font-semibold text-lg text-gray-950">Student Device Enrollment & Kiosk Setup</h3>
           <p className="text-xs text-gray-400 mt-0.5">
-            Provision real student Android tablets via QR Device Owner scanning or lock school Windows 10/11 PCs via Kiosk scripts.
+            Launch unclosable fullscreen kiosks on Windows 10/11 PCs or provision Android tablets via QR Device Owner.
           </p>
         </div>
 
         {/* Platform Switcher Buttons */}
         <div className="flex p-1 bg-gray-100 rounded-2xl shrink-0 self-start md:self-auto">
-          <button
-            onClick={() => setPlatformTab('android')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
-              platformTab === 'android'
-                ? 'bg-white text-gray-950 shadow-xs'
-                : 'text-gray-600 hover:text-gray-950'
-            }`}
-          >
-            <Tablet className="w-4 h-4 text-emerald-600" />
-            <span>Android Tablets (QR Code)</span>
-          </button>
           <button
             onClick={() => setPlatformTab('windows')}
             className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
@@ -213,10 +297,21 @@ exit
             <Monitor className="w-4 h-4 text-blue-600" />
             <span>Windows 10 & 11 PCs</span>
           </button>
+          <button
+            onClick={() => setPlatformTab('android')}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
+              platformTab === 'android'
+                ? 'bg-white text-gray-950 shadow-xs'
+                : 'text-gray-600 hover:text-gray-950'
+            }`}
+          >
+            <Tablet className="w-4 h-4 text-emerald-600" />
+            <span>Android Tablets (QR Code)</span>
+          </button>
         </div>
       </div>
 
-      {/* Server Endpoint URL bar (Auto-configures public link for other PCs) */}
+      {/* Server Endpoint URL bar */}
       <div className="bg-white p-4 rounded-3xl border border-gray-200/80 shadow-xs flex flex-col space-y-3 text-xs">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="flex items-center space-x-2.5">
@@ -226,7 +321,7 @@ exit
             <div>
               <div className="font-bold text-gray-950 text-xs">Student Kiosk Endpoint URL</div>
               <div className="text-[11px] text-gray-500">
-                Generated .BAT launchers and scripts use this URL to launch the locked kiosk on other PCs and tablets.
+                Generated .EXE and .BAT launchers connect student PCs directly to this target URL.
               </div>
             </div>
           </div>
@@ -244,6 +339,17 @@ exit
         {/* Quick URL Preset Buttons */}
         <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-gray-100 text-[11px]">
           <span className="text-gray-400 font-medium">Quick Presets:</span>
+          <button
+            type="button"
+            onClick={() => setCustomServerUrl('https://edulock.onrender.com')}
+            className={`px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
+              customServerUrl.includes('onrender.com')
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold'
+                : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            Render Live URL (edulock.onrender.com)
+          </button>
           <button
             type="button"
             onClick={() => setCustomServerUrl('https://ais-pre-zuldjajuijal776wp4zsmc-439940677577.asia-east1.run.app')}
@@ -266,9 +372,6 @@ exit
           >
             Dev Link (ais-dev)
           </button>
-          <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded-md ml-auto">
-            💡 Note: For `ais-pre` to open on other PCs, click <strong>"Share"</strong> in Google AI Studio top bar once.
-          </span>
         </div>
       </div>
 
@@ -280,13 +383,13 @@ exit
             <h4 className="text-xs font-bold text-emerald-950">Zero-Downtime Offline Kiosk + Live Reconnect Sync</h4>
           </div>
           <p className="text-[11px] text-emerald-800/90 leading-relaxed max-w-4xl">
-            {platformTab === 'android' ? (
+            {platformTab === 'windows' ? (
               <>
-                Once provisioned via QR code, <strong>the tablet stays permanently locked in kiosk mode even without internet</strong>. Offline learning tools (Scientific Calculator, Study Notes, Chemistry Reference, Offline Textbooks) remain accessible, while social media and settings are strictly blocked. When reconnected to Wi-Fi, the tablet auto-syncs with the Admin Console to receive announcements, policy updates, and app rollouts.
+                On Windows 10 & 11 PCs, <strong>EduGuard runs in fullscreen Assigned Access / Kiosk mode with local offline caching</strong>. Students cannot exit or open other programs. Even if Alt+F4 is pressed, the watchdog instantly restarts the kiosk. As soon as the PC connects to Wi-Fi/Ethernet, it auto-syncs live admin notices, uploaded PDF study materials, and updated policies.
               </>
             ) : (
               <>
-                On Windows 10 & 11 PCs, <strong>EduGuard runs in fullscreen Assigned Access / Kiosk mode with local offline caching</strong>. Students cannot exit or open other programs. As soon as the PC connects to the school network or internet, it auto-syncs live admin notices, exam broadcasts, and updated policies.
+                Once provisioned via QR code, <strong>the tablet stays permanently locked in kiosk mode even without internet</strong>. Offline learning tools (Scientific Calculator, Study Notes, Chemistry Reference, Offline Textbooks) remain accessible.
               </>
             )}
           </p>
@@ -304,7 +407,156 @@ exit
       </div>
 
       {/* ========================================================================= */}
-      {/* TAB 1: ANDROID ENTERPRISE QR ENROLLMENT */}
+      {/* TAB 1: WINDOWS 10 & 11 PC KIOSK PROVISIONING */}
+      {/* ========================================================================= */}
+      {platformTab === 'windows' && (
+        <div className="space-y-6 animate-in fade-in duration-150">
+          {/* Windows Download & Setup Methods Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Method A: Standalone Executable (.EXE) Creator */}
+            <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-xs flex flex-col justify-between space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center font-bold text-xs">
+                    <Box className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-100 uppercase">
+                    RECOMMENDED .EXE
+                  </span>
+                </div>
+                <h4 className="font-bold text-sm text-gray-950">1-Click Standalone .EXE Creator</h4>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Downloads a compilation script that uses Windows' built-in C# compiler to build a native <strong>EduGuard-Student-Kiosk.exe</strong> on the student PC. No terminal window; launches quietly into kiosk mode!
+                </p>
+              </div>
+
+              <button
+                onClick={() => downloadFile(exeCompilerBatchContent, 'Create-Student-Kiosk-EXE.bat')}
+                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-xs cursor-pointer transition-colors"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Download .EXE Builder</span>
+              </button>
+            </div>
+
+            {/* Method B: Unclosable Watchdog .BAT Launcher (Alt+F4 Protected) */}
+            <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-xs flex flex-col justify-between space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold text-xs">
+                    <RefreshCw className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 uppercase">
+                    ANTI-ALT+F4
+                  </span>
+                </div>
+                <h4 className="font-bold text-sm text-gray-950">Watchdog Auto-Restart Launcher (.BAT)</h4>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Runs an infinite watchdog loop: if the student presses <strong>Alt+F4</strong> or kills Edge, the script restarts Edge in kiosk mode in under 1 second!
+                </p>
+              </div>
+
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => downloadFile(watchdogBatchContent, 'Launch-EduGuard-Watchdog.bat')}
+                  className="flex-1 py-2.5 bg-gray-950 hover:bg-gray-900 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 shadow-xs cursor-pointer transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Download .BAT</span>
+                </button>
+                <button
+                  onClick={handleCopyWatchdog}
+                  className="px-3 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs font-semibold rounded-xl cursor-pointer"
+                  title="Copy Watchdog Script"
+                >
+                  {copiedWatchdog ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Method C: Full PowerShell Lockdown */}
+            <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-xs flex flex-col justify-between space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center font-bold text-xs">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-purple-50 text-purple-700 border border-purple-100 uppercase">
+                    POLICY LOCK
+                  </span>
+                </div>
+                <h4 className="font-bold text-sm text-gray-950">PowerShell System Lockdown</h4>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Disables Windows Task Manager, Lock Workstation, and Hotkeys via registry policy, and adds EduGuard to the Windows Startup folder.
+                </p>
+              </div>
+
+              <button
+                onClick={handleCopyPs}
+                className="w-full py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-900 text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 cursor-pointer transition-colors"
+              >
+                {copiedPs ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedPs ? 'Copied Script' : 'Copy PowerShell'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Watchdog Code Preview */}
+          <div className="bg-gray-950 text-gray-200 p-6 rounded-3xl border border-gray-900 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <FileCode className="w-5 h-5 text-emerald-400" />
+                  <h4 className="font-bold text-sm text-white">Watchdog Kiosk Script Content</h4>
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  Save as <code>Launch-EduGuard-Watchdog.bat</code> on student PCs and run as Administrator.
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => downloadFile(watchdogBatchContent, 'Launch-EduGuard-Watchdog.bat')}
+                  className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download .BAT Launcher</span>
+                </button>
+              </div>
+            </div>
+
+            <pre className="text-[11px] font-mono bg-gray-900/80 p-4 rounded-2xl overflow-x-auto text-emerald-400 border border-gray-800 leading-relaxed max-h-60">
+              {watchdogBatchContent}
+            </pre>
+          </div>
+
+          {/* Direct Win+R Run Command */}
+          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-sm text-gray-950">Quick Run via Win + R</h4>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Press <strong>Win + R</strong> on Windows 10/11, paste this command, and press Enter:
+                </p>
+              </div>
+              <button
+                onClick={handleCopyCmd}
+                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl text-xs font-semibold flex items-center space-x-1.5 cursor-pointer transition-colors"
+              >
+                {copiedCmd ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCmd ? 'Copied' : 'Copy Command'}</span>
+              </button>
+            </div>
+
+            <div className="p-3 bg-gray-950 text-emerald-400 font-mono text-xs rounded-xl border border-gray-900 select-all overflow-x-auto">
+              {windowsCmdCommand}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* TAB 2: ANDROID ENTERPRISE QR ENROLLMENT */}
       {/* ========================================================================= */}
       {platformTab === 'android' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-150">
@@ -326,7 +578,6 @@ exit
                 xmlns="http://www.w3.org/2000/svg"
               >
                 <rect width="100" height="100" fill="white" />
-                {/* Corner Position Detection Patterns */}
                 <rect x="5" y="5" width="24" height="24" fill="black" />
                 <rect x="8" y="8" width="18" height="18" fill="white" />
                 <rect x="11" y="11" width="12" height="12" fill="black" />
@@ -339,7 +590,6 @@ exit
                 <rect x="8" y="74" width="18" height="18" fill="white" />
                 <rect x="11" y="77" width="12" height="12" fill="black" />
 
-                {/* Data matrix pattern simulations */}
                 <rect x="35" y="10" width="6" height="6" fill="black" />
                 <rect x="45" y="10" width="6" height="6" fill="black" />
                 <rect x="55" y="10" width="6" height="6" fill="black" />
@@ -347,92 +597,64 @@ exit
                 <rect x="50" y="20" width="6" height="6" fill="black" />
                 <rect x="40" y="30" width="6" height="6" fill="black" />
                 <rect x="60" y="30" width="6" height="6" fill="black" />
-
-                <rect x="10" y="35" width="6" height="6" fill="black" />
-                <rect x="20" y="45" width="6" height="6" fill="black" />
-                <rect x="10" y="55" width="6" height="6" fill="black" />
-
-                <rect x="35" y="40" width="8" height="8" fill="black" />
-                <rect x="50" y="45" width="10" height="6" fill="black" />
-                <rect x="70" y="40" width="8" height="8" fill="black" />
-                <rect x="40" y="60" width="6" height="6" fill="black" />
-                <rect x="55" y="60" width="6" height="6" fill="black" />
-                <rect x="65" y="60" width="6" height="6" fill="black" />
-
-                <rect x="35" y="75" width="6" height="6" fill="black" />
-                <rect x="50" y="80" width="6" height="6" fill="black" />
-                <rect x="65" y="75" width="6" height="6" fill="black" />
-                <rect x="80" y="70" width="6" height="6" fill="black" />
-                <rect x="85" y="85" width="6" height="6" fill="black" />
               </svg>
             </div>
 
-            <div className="text-xs text-gray-400">
-              <span className="font-semibold text-gray-900 block">Token: ENR-TOK-2026-X992</span>
-              <span>Target: Class XII-A • Auto-Provisioning</span>
-            </div>
-
-            <div className="p-3 bg-blue-50/70 border border-blue-100 rounded-2xl text-[11px] text-blue-900 text-left space-y-1">
-              <div className="font-bold flex items-center space-x-1 text-blue-950">
-                <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-                <span>Device Owner Hardware Lockdown</span>
-              </div>
-              <p className="text-blue-700 leading-tight text-[10px]">
-                Tap <strong>6 times</strong> on the initial Android "Welcome / Hi There" screen to launch the hidden scanner. Scanning locks the tablet into EduGuard Kiosk Mode permanently.
+            <div className="text-xs text-gray-500 space-y-1">
+              <p className="font-semibold text-gray-900">Provision Device Owner Mode</p>
+              <p className="text-[11px]">
+                On fresh unboxed Android tablet welcome screen, tap 6 times anywhere on empty space to launch the QR scanner.
               </p>
             </div>
           </div>
 
-          {/* Right 2 Cols: Provisioning Customizer & JSON Payload Inspector */}
+          {/* Right Col: Wi-Fi Pre-Configuration & DPC JSON */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Embedding Options */}
             <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
-              <h4 className="font-bold text-[10px] text-gray-400 uppercase tracking-widest">Wi-Fi & Classroom Assignment</h4>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <h4 className="font-semibold text-sm text-gray-950">Pre-Configured Wi-Fi & Class Profile</h4>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                 <div>
-                  <label className="font-bold text-[10px] text-gray-400 uppercase tracking-widest block mb-1">Embedded Wi-Fi SSID</label>
+                  <label className="block text-gray-600 font-medium mb-1">School Wi-Fi SSID</label>
                   <input
                     type="text"
                     value={wifiSsid}
                     onChange={(e) => setWifiSsid(e.target.value)}
-                    placeholder="Enter school Wi-Fi network name"
-                    className="w-full p-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-950"
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-950 text-gray-900"
+                    placeholder="SSID name"
                   />
                 </div>
 
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="font-bold text-[10px] text-gray-400 uppercase tracking-widest block">Wi-Fi Password</label>
-                    <button
-                      type="button"
-                      onClick={() => setShowWifiPassword(!showWifiPassword)}
-                      className="text-[10px] text-gray-500 hover:text-gray-950 flex items-center space-x-1"
-                    >
-                      {showWifiPassword ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                      <span>{showWifiPassword ? 'Hide' : 'Show'}</span>
-                    </button>
-                  </div>
+                  <label className="block text-gray-600 font-medium mb-1">Wi-Fi Password</label>
                   <div className="relative">
                     <input
                       type={showWifiPassword ? 'text' : 'password'}
                       value={wifiPassword}
                       onChange={(e) => setWifiPassword(e.target.value)}
-                      placeholder="••••••••••••"
-                      className="w-full p-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs font-mono text-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-950"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-950 text-gray-900 pr-9"
+                      placeholder="Leave blank for open WLAN"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowWifiPassword(!showWifiPassword)}
+                      className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600 cursor-pointer"
+                    >
+                      {showWifiPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
                   </div>
                 </div>
 
                 <div className="md:col-span-2">
-                  <label className="font-bold text-[10px] text-gray-400 uppercase tracking-widest block mb-1">Target Classroom Auto-Assignment</label>
+                  <label className="block text-gray-600 font-medium mb-1">Assign Default Class Profile</label>
                   <select
                     value={selectedClassId}
                     onChange={(e) => setSelectedClassId(e.target.value)}
-                    className="w-full p-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs font-semibold text-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-950"
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-1 focus:ring-gray-950 text-gray-900"
                   >
-                    {classes.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.section})
+                    {classes.map((cls) => (
+                      <option key={cls.id} value={cls.id}>
+                        {cls.name} ({cls.gradeLevel}) — {cls.enrolledCount} enrolled
                       </option>
                     ))}
                   </select>
@@ -440,12 +662,12 @@ exit
               </div>
             </div>
 
-            {/* DPC Provisioning JSON Bundle */}
+            {/* DPC Raw JSON */}
             <div className="bg-gray-950 text-gray-200 p-6 rounded-3xl border border-gray-900 shadow-xs space-y-3">
-              <div className="flex justify-between items-center">
-                <div className="flex items-center space-x-2">
-                  <Terminal className="w-4 h-4 text-blue-400" />
-                  <span className="font-bold text-[10px] text-gray-300 uppercase tracking-widest">Android Enterprise DPC Payload</span>
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-semibold text-sm text-white">Android Enterprise Zero-Touch Payload</h4>
+                  <p className="text-[11px] text-gray-400">Payload embedded into QR Code</p>
                 </div>
                 <button
                   onClick={handleCopyAndroid}
@@ -459,142 +681,6 @@ exit
               <pre className="text-[11px] font-mono bg-gray-900/60 p-4 rounded-2xl overflow-x-auto text-emerald-400 border border-gray-800">
                 {jsonString}
               </pre>
-            </div>
-
-            {/* ADB Command Fallback */}
-            <div className="bg-gray-50/70 p-6 rounded-3xl border border-gray-100 text-xs space-y-2">
-              <h4 className="font-semibold text-gray-950 flex items-center space-x-1.5">
-                <Terminal className="w-3.5 h-3.5 text-blue-600" />
-                <span>Manual ADB Provisioning Command (Developer & Lab Mode)</span>
-              </h4>
-              <p className="text-gray-500">
-                For testing on physical tablets without factory reset, remove all Google accounts first and run via USB debugging:
-              </p>
-              <div className="p-3 bg-gray-950 text-gray-200 font-mono text-[11px] rounded-xl border border-gray-900 select-all">
-                adb shell dpm set-device-owner com.eduguard.mdm/.receiver.DeviceAdminReceiver
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* TAB 2: WINDOWS 10 & 11 PC KIOSK PROVISIONING */}
-      {/* ========================================================================= */}
-      {platformTab === 'windows' && (
-        <div className="space-y-6 animate-in fade-in duration-150">
-          {/* Windows Overview Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center font-bold text-xs">
-                1
-              </div>
-              <h4 className="font-bold text-sm text-gray-950">Assigned Access Kiosk</h4>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                Locks Windows 10/11 into single-app kiosk mode. Hides desktop, taskbar, start menu, and blocks switching away.
-              </p>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-bold text-xs">
-                2
-              </div>
-              <h4 className="font-bold text-sm text-gray-950">Full Offline Operation</h4>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                Cached progressive web app and local offline tools (Calculator, Scratchpad, Chemistry Reference, Textbooks) run without internet.
-              </p>
-            </div>
-
-            <div className="bg-white p-5 rounded-3xl border border-gray-100 shadow-xs space-y-2">
-              <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-700 flex items-center justify-center font-bold text-xs">
-                3
-              </div>
-              <h4 className="font-bold text-sm text-gray-950">Live Auto-Sync On Reconnect</h4>
-              <p className="text-xs text-gray-500 leading-relaxed">
-                When the PC connects to Wi-Fi/Ethernet, admin announcements immediately pop up and policy updates apply in real time.
-              </p>
-            </div>
-          </div>
-
-          {/* Setup Option A: 1-Click PowerShell Lockdown Script */}
-          <div className="bg-gray-950 text-gray-200 p-6 rounded-3xl border border-gray-900 shadow-xs space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center space-x-2">
-                  <FileCode className="w-5 h-5 text-blue-400" />
-                  <h4 className="font-bold text-sm text-white">Method 1: 1-Click PowerShell Kiosk Setup Script</h4>
-                </div>
-                <p className="text-xs text-gray-400 mt-0.5">
-                  Run in Windows PowerShell (Administrator) on student PCs to disable Taskmgr/Alt-Tab and auto-launch locked kiosk.
-                </p>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={handleDownloadBatch}
-                  className="px-3.5 py-2 bg-gray-900 hover:bg-gray-800 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 border border-gray-800 transition-colors cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5 text-blue-400" />
-                  <span>Download .BAT Launcher</span>
-                </button>
-                <button
-                  onClick={handleCopyPs}
-                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
-                >
-                  {copiedPs ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedPs ? 'Copied Script' : 'Copy PowerShell'}</span>
-                </button>
-              </div>
-            </div>
-
-            <pre className="text-[11px] font-mono bg-gray-900/80 p-4 rounded-2xl overflow-x-auto text-emerald-400 border border-gray-800 leading-relaxed max-h-72">
-              {windowsPowerShellScript}
-            </pre>
-          </div>
-
-          {/* Setup Option B: Direct Windows Command / Edge Kiosk */}
-          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-bold text-sm text-gray-950">Method 2: Direct Command Line (Edge/Chrome Kiosk Mode)</h4>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Press <strong>Win + R</strong> on Windows 10/11, paste this command, and press Enter:
-                </p>
-              </div>
-              <button
-                onClick={handleCopyCmd}
-                className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-900 rounded-xl text-xs font-semibold flex items-center space-x-1.5 cursor-pointer transition-colors"
-              >
-                {copiedCmd ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedCmd ? 'Copied' : 'Copy Command'}</span>
-              </button>
-            </div>
-
-            <div className="p-3 bg-gray-950 text-emerald-400 font-mono text-xs rounded-xl border border-gray-900 select-all overflow-x-auto">
-              {windowsCmdCommand}
-            </div>
-          </div>
-
-          {/* Setup Option C: Windows Native Assigned Access Instructions */}
-          <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-xs space-y-3">
-            <h4 className="font-bold text-sm text-gray-950">Method 3: Windows Native Settings (Assigned Access GUI)</h4>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs text-gray-700">
-              <div className="p-3 bg-gray-50 rounded-2xl border border-gray-100 space-y-1">
-                <span className="font-bold text-gray-950 block">Step 1</span>
-                <span>Open <strong>Windows Settings</strong> &gt; <strong>Accounts</strong> &gt; <strong>Other users</strong>.</span>
-              </div>
-              <div className="p-3 bg-gray-50 rounded-2xl border border-gray-100 space-y-1">
-                <span className="font-bold text-gray-950 block">Step 2</span>
-                <span>Select <strong>Set up a kiosk (Assigned access)</strong> &gt; <strong>Get started</strong>.</span>
-              </div>
-              <div className="p-3 bg-gray-50 rounded-2xl border border-gray-100 space-y-1">
-                <span className="font-bold text-gray-950 block">Step 3</span>
-                <span>Choose <strong>Microsoft Edge</strong> as a digital sign / kiosk app.</span>
-              </div>
-              <div className="p-3 bg-gray-50 rounded-2xl border border-gray-100 space-y-1">
-                <span className="font-bold text-gray-950 block">Step 4</span>
-                <span>Enter URL: <code className="text-blue-600 font-mono text-[10px] break-all">{currentAppUrl}</code></span>
-              </div>
             </div>
           </div>
         </div>

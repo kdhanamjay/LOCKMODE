@@ -21,6 +21,7 @@ import {
   SystemRetentionSettings,
   AdminUser,
   AdminBroadcastMessage,
+  StudyMaterial,
 } from './types/mdm';
 
 import { Sidebar, NavSection } from './components/Sidebar';
@@ -28,6 +29,7 @@ import { Header } from './components/Header';
 import { DashboardView } from './components/DashboardView';
 import { DevicesView } from './components/DevicesView';
 import { DeviceDetailModal } from './components/DeviceDetailModal';
+import { StudyMaterialsView } from './components/StudyMaterialsView';
 import { AnnouncementsView } from './components/AnnouncementsView';
 import { PoliciesView } from './components/PoliciesView';
 import { ApplicationsView } from './components/ApplicationsView';
@@ -74,6 +76,7 @@ export function App() {
   const [tokens, setTokens] = useState<EnrollmentToken[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [messages, setMessages] = useState<AdminBroadcastMessage[]>([]);
+  const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
   const [settings, setSettings] = useState<SystemRetentionSettings>({
     heartbeatRetentionDays: 30,
     appUsageRetentionDays: 90,
@@ -116,6 +119,7 @@ export function App() {
         logsData,
         settingsData,
         messagesData,
+        materialsData,
       ] = await Promise.all([
         api.getDashboardStats(),
         api.getDevices(),
@@ -132,6 +136,7 @@ export function App() {
         api.getAuditLogs(),
         api.getSettings(),
         api.getMessages(),
+        api.getStudyMaterials(),
       ]);
 
       setStats(statsData);
@@ -150,6 +155,7 @@ export function App() {
       setAuditLogs(logsData);
       setSettings(settingsData);
       setMessages(messagesData);
+      setStudyMaterials(materialsData);
     } catch (err) {
       console.error('Failed to fetch MDM data', err);
     } finally {
@@ -167,24 +173,50 @@ export function App() {
       setSseConnected(true);
 
       if (eventType === 'device_update') {
-        setDevices((prev) =>
-          prev.map((d) => (d.id === data.device?.id ? { ...d, ...data.device } : d))
+        const updatedDev = data.device || data;
+        setDevices((prev) => {
+          const exists = prev.some((d) => d.id === updatedDev.id || d.deviceId === updatedDev.deviceId);
+          if (exists) {
+            return prev.map((d) => (d.id === updatedDev.id || d.deviceId === updatedDev.deviceId ? { ...d, ...updatedDev } : d));
+          }
+          return [updatedDev, ...prev];
+        });
+        setSelectedDeviceForModal((prev) =>
+          prev?.id === updatedDev.id || prev?.deviceId === updatedDev.deviceId ? { ...prev, ...updatedDev } : prev
         );
-        // Refresh selected device modal if open
-        setSelectedDeviceForModal((prev) => (prev?.id === data.device?.id ? { ...prev, ...data.device } : prev));
-        showToast(`Device ${data.device?.deviceId || ''} updated status to ${data.device?.status}`);
+        showToast(`Device ${updatedDev.deviceId || ''} status: ${updatedDev.status || 'Updated'}`);
+      } else if (eventType === 'device_enrolled') {
+        const enrolledDev = data.device || data;
+        setDevices((prev) => [enrolledDev, ...prev.filter((d) => d.id !== enrolledDev.id && d.deviceId !== enrolledDev.deviceId)]);
+        if (data.student) {
+          setStudents((prev) => [data.student, ...prev.filter((s) => s.id !== data.student.id)]);
+        }
+        showToast(`🎉 New Device Enrolled: ${enrolledDev.name} (${enrolledDev.deviceId})`);
+        // Refresh counts
+        api.getDashboardStats().then(setStats).catch(() => {});
+        api.getClasses().then(setClasses).catch(() => {});
+        api.getSchools().then(setSchools).catch(() => {});
+      } else if (eventType === 'student_created') {
+        setStudents((prev) => [data, ...prev.filter((s) => s.id !== data.id)]);
+      } else if (eventType === 'class_updated') {
+        setClasses((prev) => prev.map((c) => (c.id === data.id ? { ...c, ...data } : c)));
       } else if (eventType === 'violation_alert') {
-        setViolations((prev) => [data.violation, ...prev]);
-        showToast(`Security Alert: ${data.violation?.type} on ${data.violation?.deviceId}`, 'alert');
+        setViolations((prev) => [data.violation || data, ...prev]);
+        showToast(`Security Alert: ${data.violation?.type || data.type} on ${data.violation?.deviceId || data.deviceId}`, 'alert');
       } else if (eventType === 'violation_resolved') {
         setViolations((prev) =>
-          prev.map((v) => (v.id === data.violation?.id ? { ...v, isResolved: true } : v))
+          prev.map((v) => (v.id === (data.violation?.id || data.id) ? { ...v, isResolved: true } : v))
         );
       } else if (eventType === 'audit_log') {
-        setAuditLogs((prev) => [data.log, ...prev]);
+        setAuditLogs((prev) => [data.log || data, ...prev]);
+      } else if (eventType === 'study_material_uploaded') {
+        setStudyMaterials((prev) => [data, ...prev.filter((m) => m.id !== data.id)]);
+        showToast(`New Material: ${data.title} uploaded for ${data.subject}`);
+      } else if (eventType === 'study_material_deleted') {
+        setStudyMaterials((prev) => prev.filter((m) => m.id !== (data.materialId || data.id)));
       } else if (eventType === 'admin_broadcast_message') {
-        setMessages((prev) => [data, ...prev]);
-        showToast(`New Broadcast: "${data.title}" sent to ${data.targetName}`);
+        setMessages((prev) => [data, ...prev.filter((m) => m.id !== data.id)]);
+        showToast(`📢 Live Notice Broadcasted: "${data.title}"`, 'alert');
       } else if (eventType === 'message_acknowledged') {
         setMessages((prev) =>
           prev.map((m) =>
@@ -324,6 +356,27 @@ export function App() {
     }
   };
 
+  const handleUploadStudyMaterial = async (data: Partial<StudyMaterial>) => {
+    try {
+      const created = await api.uploadStudyMaterial(data);
+      setStudyMaterials((prev) => [created, ...prev.filter((m) => m.id !== created.id)]);
+      showToast(`Study material "${created.title}" published!`);
+    } catch (e: any) {
+      showToast(e.message || 'Failed to upload material', 'alert');
+      throw e;
+    }
+  };
+
+  const handleDeleteStudyMaterial = async (materialId: string) => {
+    try {
+      await api.deleteStudyMaterial(materialId);
+      setStudyMaterials((prev) => prev.filter((m) => m.id !== materialId));
+      showToast('Study material removed.');
+    } catch (e: any) {
+      showToast(e.message || 'Failed to delete material', 'alert');
+    }
+  };
+
   const handleUpdateSettings = async (settingsData: Partial<SystemRetentionSettings>) => {
     try {
       const updated = await api.updateSettings(settingsData);
@@ -365,6 +418,7 @@ export function App() {
           device={simulatorDevice}
           policy={simulatorPolicy}
           applications={applications}
+          studyMaterials={studyMaterials}
           onExit={() => setIsStudentWorkspaceOpen(false)}
         />
       );
@@ -405,6 +459,7 @@ export function App() {
         onlineCount={onlineCount}
         lockedCount={lockedCount}
         violationCount={violations.filter((v) => !v.isResolved).length}
+        materialsCount={studyMaterials.length}
         isSimulatorOpen={isSimulatorOpen}
         onToggleSimulator={() => setIsSimulatorOpen(!isSimulatorOpen)}
         onLaunchStudentWorkspace={() => setIsStudentWorkspaceOpen(true)}
@@ -441,6 +496,17 @@ export function App() {
                 onOpenDeviceDetail={setSelectedDeviceForModal}
                 onQuickLock={handleLockDevice}
                 onQuickUnlock={handleUnlockDevice}
+              />
+            )}
+
+            {currentSection === 'study_materials' && (
+              <StudyMaterialsView
+                materials={studyMaterials}
+                classes={classes}
+                currentUser={currentUser}
+                onUploadMaterial={handleUploadStudyMaterial}
+                onDeleteMaterial={handleDeleteStudyMaterial}
+                onRefresh={loadAllData}
               />
             )}
 
@@ -545,6 +611,7 @@ export function App() {
           device={simulatorDevice}
           policy={simulatorPolicy}
           applications={applications}
+          studyMaterials={studyMaterials}
           onExit={() => setIsStudentWorkspaceOpen(false)}
         />
       )}

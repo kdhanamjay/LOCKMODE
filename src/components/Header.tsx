@@ -24,6 +24,7 @@ interface HeaderProps {
 const sectionTitles: Record<NavSection, { title: string; subtitle: string }> = {
   dashboard: { title: 'Fleet Overview', subtitle: 'Real-time telemetry and operational metrics across student hardware' },
   devices: { title: 'Managed Devices', subtitle: 'Central hardware inventory, battery health, and remote DPC actions' },
+  study_materials: { title: 'Study Notes & PDFs', subtitle: 'Upload and distribute class-wise subject study materials and notes' },
   announcements: { title: 'Broadcast Notices', subtitle: 'Push real-time announcements, urgent exam instructions, and alerts to student tablets' },
   policies: { title: 'Policy Engine', subtitle: 'Immutable kiosk lockdown profiles and hardware security restrictions' },
   applications: { title: 'App Management', subtitle: 'Enterprise APK rollouts, Play Store catalog, and package deployments' },

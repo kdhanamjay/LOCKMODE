@@ -19,6 +19,7 @@ import {
   SystemRetentionSettings,
   AdminUser,
   AdminBroadcastMessage,
+  StudyMaterial,
 } from '../types/mdm';
 
 const BASE_URL = '/api';
@@ -75,6 +76,34 @@ export const api = {
   // Devices & Remote Commands
   getDevices: async () => fetchJson<Device[]>('/devices'),
   getDeviceById: async (id: string) => fetchJson<Device>(`/devices/${id}`),
+  enrollDevice: async (data: {
+    deviceId?: string;
+    name?: string;
+    model?: string;
+    manufacturer?: string;
+    platform?: string;
+    osVersion?: string;
+    schoolId?: string;
+    classId?: string;
+    studentName?: string;
+    studentRoll?: string;
+    studentEmail?: string;
+    batteryLevel?: number;
+    isCharging?: boolean;
+    ramTotalGb?: number;
+    storageTotalGb?: number;
+    ipAddress?: string;
+  }) =>
+    fetchJson<{
+      device: Device;
+      student: Student;
+      school: School;
+      class: SchoolClass;
+      policy: DevicePolicy;
+    }>('/devices/enroll', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   lockDevice: async (id: string, reason?: string) =>
     fetchJson<{ device: Device; command: RemoteCommand }>(`/devices/${id}/lock`, {
       method: 'POST',
@@ -168,6 +197,25 @@ export const api = {
       body: JSON.stringify({ deviceId }),
     }),
 
+  // Class-wise & Subject-wise Study Materials & PDFs
+  getStudyMaterials: async (params?: { classId?: string; subject?: string; type?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.classId) query.set('classId', params.classId);
+    if (params?.subject) query.set('subject', params.subject);
+    if (params?.type) query.set('type', params.type);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    return fetchJson<StudyMaterial[]>(`/study-materials${qs}`);
+  },
+  uploadStudyMaterial: async (data: Partial<StudyMaterial>) =>
+    fetchJson<StudyMaterial>('/study-materials', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteStudyMaterial: async (id: string) =>
+    fetchJson<{ deleted: boolean; id: string }>(`/study-materials/${id}`, {
+      method: 'DELETE',
+    }),
+
   // Simulator Bridge
   simulatorHeartbeat: async (payload: any) =>
     fetchJson<{ acknowledged: boolean; device?: Device }>('/simulator/heartbeat', {
@@ -196,6 +244,9 @@ export function subscribeToMdmEvents(onEvent: (eventType: string, data: any) => 
 
   const eventTypes = [
     'device_update',
+    'device_enrolled',
+    'student_created',
+    'class_updated',
     'command_update',
     'policy_published',
     'deployment_started',
@@ -204,6 +255,8 @@ export function subscribeToMdmEvents(onEvent: (eventType: string, data: any) => 
     'audit_log',
     'admin_broadcast_message',
     'message_acknowledged',
+    'study_material_uploaded',
+    'study_material_deleted',
   ];
 
   eventTypes.forEach((type) => {

@@ -16,12 +16,14 @@ import {
   Tablet,
   LogOut,
   Megaphone,
+  BookOpen,
 } from 'lucide-react';
 import { AdminUser } from '../types/mdm';
 
 export type NavSection =
   | 'dashboard'
   | 'devices'
+  | 'study_materials'
   | 'announcements'
   | 'policies'
   | 'applications'
@@ -41,6 +43,7 @@ interface SidebarProps {
   onlineCount: number;
   lockedCount: number;
   violationCount: number;
+  materialsCount?: number;
   isSimulatorOpen: boolean;
   onToggleSimulator: () => void;
   onLaunchStudentWorkspace?: () => void;
@@ -54,6 +57,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onlineCount,
   lockedCount,
   violationCount,
+  materialsCount,
   isSimulatorOpen,
   onToggleSimulator,
   onLaunchStudentWorkspace,
@@ -67,6 +71,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Smartphone,
       badge: onlineCount ? `${onlineCount} Live` : undefined,
       badgeColor: 'bg-emerald-50 text-emerald-700 border border-emerald-100/60',
+    },
+    {
+      id: 'study_materials' as NavSection,
+      label: 'Study Notes & PDFs',
+      icon: BookOpen,
+      badge: materialsCount ? `${materialsCount}` : undefined,
+      badgeColor: 'bg-blue-50 text-blue-700 border border-blue-100/60 font-semibold',
     },
     { id: 'announcements' as NavSection, label: 'Broadcast Notices', icon: Megaphone },
     { id: 'policies' as NavSection, label: 'Policy & Kiosk Engine', icon: ShieldCheck },

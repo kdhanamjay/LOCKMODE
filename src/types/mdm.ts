@@ -53,6 +53,7 @@ export interface Student {
   studentId: string; // School enrollment ID (e.g. STU-2026-001)
   name: string;
   email?: string;
+  rollNumber?: string;
   schoolId: string;
   classId: string;
   className: string;
@@ -68,16 +69,18 @@ export interface Student {
 export type DeviceStatus = 'ONLINE' | 'OFFLINE' | 'LOCKED' | 'TAMPERED';
 export type ManagementMode = 'DEVICE_OWNER' | 'PROFILE_OWNER' | 'UNMANAGED';
 export type KioskMode = 'FULL_LOCKDOWN' | 'LIMITED_LOCKDOWN' | 'CUSTOM';
+export type DevicePlatform = 'WINDOWS_PC' | 'ANDROID_TABLET' | 'IPAD' | 'LINUX_PC' | 'MACOS' | 'MOBILE';
 
 export interface Device {
   id: string;
-  deviceId: string; // Hardware/MDM ID (e.g. TAB-1001)
+  deviceId: string; // Hardware/MDM ID (e.g. TAB-1001 or PC-LAB-01)
   serialNumber: string;
   imei?: string;
   name: string;
   model: string;
   manufacturer: string;
-  osVersion: string; // e.g. "Android 15 (Vanilla Ice Cream)"
+  platform?: DevicePlatform;
+  osVersion: string; // e.g. "Windows 11 Pro" or "Android 15"
   agentVersion: string; // e.g. "1.4.2"
   managementMode: ManagementMode;
   status: DeviceStatus;
@@ -89,6 +92,7 @@ export interface Device {
   className?: string;
   assignedStudentId?: string;
   assignedStudentName?: string;
+  assignedStudentRoll?: string;
   batteryLevel: number;
   isCharging: boolean;
   networkType: 'WIFI' | 'CELLULAR' | 'NONE';
@@ -413,4 +417,28 @@ export interface AdminBroadcastMessage {
   requireAcknowledgment: boolean;
   acknowledgedDeviceIds: string[];
 }
+
+export type StudyMaterialType = 'PDF' | 'RICH_NOTE' | 'WORKSHEET' | 'REFERENCE';
+
+export interface StudyMaterial {
+  id: string;
+  title: string;
+  description?: string;
+  type: StudyMaterialType;
+  schoolId: string;
+  classId: string; // e.g. 'cls-12-a' or 'ALL'
+  className: string; // e.g. 'Class XII-A' or 'All Classes'
+  subject: string; // e.g. 'Mathematics', 'Physics', 'Chemistry', 'Biology', 'English', 'Computer Science'
+  chapterOrUnit?: string;
+  fileUrl?: string; // Data URL (base64) or direct PDF link
+  fileName?: string;
+  fileSizeBytes?: number;
+  contentMarkdown?: string; // Rich notes content
+  authorName: string;
+  authorRole: string;
+  uploadedAt: string;
+  allowOfflineDownload: boolean;
+  viewCount: number;
+}
+
 

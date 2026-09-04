@@ -172,6 +172,171 @@ apiRouter.get('/devices', (req: AuthenticatedRequest, res: Response) => {
   return sendSuccess(res, db.devices);
 });
 
+apiRouter.post('/devices/enroll', (req: AuthenticatedRequest, res: Response) => {
+  const {
+    deviceId,
+    name,
+    model,
+    manufacturer,
+    platform,
+    osVersion,
+    schoolId,
+    classId,
+    studentName,
+    studentRoll,
+    studentEmail,
+    batteryLevel,
+    isCharging,
+    ramTotalGb,
+    storageTotalGb,
+    ipAddress,
+  } = req.body;
+
+  const targetSchool = db.schools.find((s) => s.id === schoolId) || db.schools[0];
+  const targetClass = db.classes.find((c) => c.id === classId) || db.classes[0];
+  const targetPolicy = db.policies.find((p) => p.id === targetClass.assignedPolicyId) || db.policies[0];
+
+  const rollNumber = studentRoll || `RN-${Math.floor(100 + Math.random() * 900)}`;
+  const studentFullName = studentName || `Student ${rollNumber}`;
+  
+  // 1. Find or create student
+  let student = db.students.find(
+    (s) => s.rollNumber === rollNumber || (s.name.toLowerCase() === studentFullName.toLowerCase() && s.classId === targetClass.id)
+  );
+
+  if (!student) {
+    student = {
+      id: `stu-${Date.now()}`,
+      studentId: `STU-2026-${String(db.students.length + 1).padStart(3, '0')}`,
+      name: studentFullName,
+      email: studentEmail || `${studentFullName.toLowerCase().replace(/\s+/g, '.')}@school.edu`,
+      rollNumber: rollNumber,
+      schoolId: targetSchool.id,
+      classId: targetClass.id,
+      className: targetClass.name,
+      section: targetClass.section,
+      status: 'ACTIVE',
+      createdAt: new Date().toISOString(),
+    };
+    db.students.unshift(student);
+    targetClass.studentCount += 1;
+    targetSchool.totalStudents += 1;
+  }
+
+  // 2. Format Device ID (e.g. PC-LAB-102, TAB-1008, etc.)
+  const genDevId = deviceId || (
+    platform === 'WINDOWS_PC' ? `PC-${targetClass.section}-${Math.floor(100 + Math.random() * 900)}` :
+    platform === 'IPAD' ? `IPAD-${Math.floor(100 + Math.random() * 900)}` :
+    platform === 'MOBILE' ? `MOB-${Math.floor(100 + Math.random() * 900)}` :
+    `TAB-${Math.floor(1000 + Math.random() * 9000)}`
+  );
+
+  // Check if existing device exists
+  let device = db.devices.find((d) => d.deviceId === genDevId || d.id === req.body.id);
+
+  if (device) {
+    device.name = name || device.name;
+    device.model = model || device.model;
+    device.manufacturer = manufacturer || device.manufacturer;
+    device.platform = platform || device.platform;
+    device.osVersion = osVersion || device.osVersion;
+    device.schoolId = targetSchool.id;
+    device.schoolName = targetSchool.name;
+    device.classId = targetClass.id;
+    device.className = targetClass.name;
+    device.assignedStudentId = student.id;
+    device.assignedStudentName = student.name;
+    device.assignedStudentRoll = student.rollNumber;
+    device.status = 'ONLINE';
+    device.lastHeartbeat = new Date().toISOString();
+    device.policyId = targetPolicy.id;
+    device.policyVersion = targetPolicy.version;
+    device.policySyncedAt = new Date().toISOString();
+    if (batteryLevel !== undefined) device.batteryLevel = batteryLevel;
+    if (isCharging !== undefined) device.isCharging = isCharging;
+    if (ipAddress) device.ipAddress = ipAddress;
+  } else {
+    device = {
+      id: `dev-${Date.now()}`,
+      deviceId: genDevId,
+      serialNumber: `SN-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
+      name: name || `${platform === 'WINDOWS_PC' ? 'Windows Kiosk PC' : 'Student Device'} (${student.name})`,
+      model: model || (platform === 'WINDOWS_PC' ? 'Windows 11 PC (x64)' : 'EduGuard Pro Tablet'),
+      manufacturer: manufacturer || (platform === 'WINDOWS_PC' ? 'Microsoft / OEM' : 'EduGuard'),
+      platform: platform || 'WINDOWS_PC',
+      osVersion: osVersion || 'Windows 11 / Android 15',
+      agentVersion: '1.4.2',
+      managementMode: 'DEVICE_OWNER',
+      status: 'ONLINE',
+      isLocked: false,
+      schoolId: targetSchool.id,
+      schoolName: targetSchool.name,
+      classId: targetClass.id,
+      className: targetClass.name,
+      assignedStudentId: student.id,
+      assignedStudentName: student.name,
+      assignedStudentRoll: student.rollNumber,
+      batteryLevel: batteryLevel ?? 100,
+      isCharging: isCharging ?? true,
+      networkType: 'WIFI',
+      wifiSsid: 'School_Secure_WLAN',
+      ipAddress: ipAddress || (req.ip === '::1' ? '192.168.1.105' : req.ip || '192.168.1.105'),
+      storageTotalGb: storageTotalGb || 256,
+      storageUsedGb: 32.4,
+      ramTotalGb: ramTotalGb || 16,
+      ramUsedGb: 4.2,
+      policyId: targetPolicy.id,
+      policyVersion: targetPolicy.version,
+      policySyncedAt: new Date().toISOString(),
+      lastHeartbeat: new Date().toISOString(),
+      currentActiveApp: 'com.eduguard.workspace',
+      kioskMode: 'FULL_LOCKDOWN',
+      enrollmentDate: new Date().toISOString(),
+      hardwareSecurity: {
+        knoxSupported: platform === 'ANDROID_TABLET',
+        playIntegrityPass: true,
+        deviceRooted: false,
+        developerOptionsDisabled: true,
+        usbDebuggingDisabled: true,
+      },
+    };
+    db.devices.unshift(device);
+    targetClass.deviceCount += 1;
+    targetSchool.totalDevices += 1;
+  }
+
+  // Link student device
+  student.deviceId = device.id;
+  student.deviceName = device.name;
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Self-Enrollment Engine',
+    adminRole: 'SCHOOL_ADMIN',
+    schoolId: targetSchool.id,
+    action: 'ENROLL_DEVICE',
+    targetType: 'DEVICE',
+    targetId: device.id,
+    targetDescription: `Enrolled ${platform || 'device'} "${device.name}" (${device.deviceId}) for ${student.name} in ${targetClass.name}`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  // Broadcast real-time SSE updates across the entire system
+  db.broadcast('device_update', device);
+  db.broadcast('device_enrolled', { device, student, classId: targetClass.id });
+  db.broadcast('student_created', student);
+  db.broadcast('class_updated', targetClass);
+
+  return sendSuccess(res, {
+    device,
+    student,
+    school: targetSchool,
+    class: targetClass,
+    policy: targetPolicy,
+  }, `Successfully enrolled ${device.name} in ${targetClass.name}.`);
+});
+
 apiRouter.get('/devices/:id', (req: AuthenticatedRequest, res: Response) => {
   const device = db.devices.find((d) => d.id === req.params.id || d.deviceId === req.params.id);
   if (!device) {
@@ -902,4 +1067,112 @@ apiRouter.post('/messages/:id/ack', (req: AuthenticatedRequest, res: Response) =
 
   return sendSuccess(res, msg, 'Message acknowledged.');
 });
+
+// -------------------------------------------------------------
+// 12. CLASS-WISE & SUBJECT-WISE STUDY NOTES & PDF MATERIALS
+// -------------------------------------------------------------
+apiRouter.get('/study-materials', (req: AuthenticatedRequest, res: Response) => {
+  const { classId, subject, type } = req.query;
+  let materials = db.studyMaterials;
+
+  if (classId && typeof classId === 'string' && classId !== 'ALL') {
+    materials = materials.filter((m) => m.classId === classId || m.classId === 'ALL');
+  }
+
+  if (subject && typeof subject === 'string' && subject !== 'ALL') {
+    materials = materials.filter((m) => m.subject.toLowerCase() === subject.toLowerCase());
+  }
+
+  if (type && typeof type === 'string') {
+    materials = materials.filter((m) => m.type === type);
+  }
+
+  return sendSuccess(res, materials);
+});
+
+apiRouter.post('/study-materials', (req: AuthenticatedRequest, res: Response) => {
+  const {
+    title,
+    description,
+    type,
+    classId,
+    className,
+    subject,
+    chapterOrUnit,
+    fileUrl,
+    fileName,
+    fileSizeBytes,
+    contentMarkdown,
+    allowOfflineDownload,
+  } = req.body;
+
+  if (!title || !subject || !classId) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'Title, subject, and target class are required.');
+  }
+
+  const newMaterial = {
+    id: `mat-${Date.now()}`,
+    title: title.trim(),
+    description: description?.trim() || '',
+    type: type || 'PDF',
+    schoolId: req.user?.schoolId || 'sch-greenwood-01',
+    classId: classId,
+    className: className || (classId === 'ALL' ? 'All Classes' : (db.classes.find((c) => c.id === classId)?.name || 'Classroom')),
+    subject: subject.trim(),
+    chapterOrUnit: chapterOrUnit?.trim() || 'General',
+    fileUrl: fileUrl || undefined,
+    fileName: fileName || (type === 'PDF' ? `${title.replace(/\s+/g, '_')}.pdf` : undefined),
+    fileSizeBytes: fileSizeBytes || (type === 'PDF' ? 1024000 : 45000),
+    contentMarkdown: contentMarkdown || (type === 'RICH_NOTE' ? `# ${title}\n\n${description || ''}` : undefined),
+    authorName: req.user?.name || 'Administrator',
+    authorRole: req.user?.role || 'TEACHER',
+    uploadedAt: new Date().toISOString(),
+    allowOfflineDownload: allowOfflineDownload !== undefined ? allowOfflineDownload : true,
+    viewCount: 0,
+  };
+
+  db.studyMaterials.unshift(newMaterial);
+  db.broadcast('study_material_uploaded', newMaterial);
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Admin',
+    adminRole: req.user?.role || 'SCHOOL_ADMIN',
+    schoolId: req.user?.schoolId || 'sch-greenwood-01',
+    action: 'UPLOAD_STUDY_MATERIAL',
+    targetType: 'APPLICATION',
+    targetId: newMaterial.id,
+    targetDescription: `Uploaded ${newMaterial.subject} material "${newMaterial.title}" for ${newMaterial.className}`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  return sendSuccess(res, newMaterial, 'Study material / PDF uploaded successfully and dispatched to student devices.');
+});
+
+apiRouter.delete('/study-materials/:id', (req: AuthenticatedRequest, res: Response) => {
+  const index = db.studyMaterials.findIndex((m) => m.id === req.params.id);
+  if (index === -1) {
+    return sendError(res, 404, 'NOT_FOUND', 'Study material not found.');
+  }
+
+  const [removed] = db.studyMaterials.splice(index, 1);
+  db.broadcast('study_material_deleted', { id: req.params.id });
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Admin',
+    adminRole: req.user?.role || 'SCHOOL_ADMIN',
+    schoolId: req.user?.schoolId || 'sch-greenwood-01',
+    action: 'DELETE_STUDY_MATERIAL',
+    targetType: 'APPLICATION',
+    targetId: removed.id,
+    targetDescription: `Removed ${removed.subject} material "${removed.title}"`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  return sendSuccess(res, { deleted: true, id: req.params.id });
+});
+
 

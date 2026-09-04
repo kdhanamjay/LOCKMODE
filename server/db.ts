@@ -19,7 +19,8 @@ import {
   SystemRetentionSettings,
   DashboardStats,
   AdminUser,
-  AdminBroadcastMessage
+  AdminBroadcastMessage,
+  StudyMaterial,
 } from '../src/types/mdm';
 
 class DatabaseStore {
@@ -39,6 +40,7 @@ class DatabaseStore {
   enrollmentTokens: EnrollmentToken[] = [];
   adminUsers: AdminUser[] = [];
   messages: AdminBroadcastMessage[] = [];
+  studyMaterials: StudyMaterial[] = [];
   settings: SystemRetentionSettings = {
     heartbeatRetentionDays: 30,
     appUsageRetentionDays: 90,
@@ -971,6 +973,184 @@ class DatabaseStore {
         requireAcknowledgment: true,
         acknowledgedDeviceIds: [],
       }
+    ];
+
+    // Seed Class-wise & Subject-wise Notes and PDF Study Materials
+    this.studyMaterials = [
+      {
+        id: 'mat-01',
+        title: 'Class XII: Differential & Integral Calculus Complete Formula Handbook',
+        description: 'Comprehensive formula derivations, limits, standard integrals, and trigonometric substitutions for CBSE/State Board exams.',
+        type: 'PDF',
+        schoolId: 'sch-greenwood-01',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        subject: 'Mathematics',
+        chapterOrUnit: 'Unit 3: Calculus',
+        fileName: 'Class_12_Calculus_Formula_Sheet.pdf',
+        fileSizeBytes: 2450000,
+        contentMarkdown: `# Differential & Integral Calculus Summary Guide
+## 1. Limits & Continuity
+- **Definition of Derivative**: $f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$
+- **Chain Rule**: $\\frac{d}{dx}[f(g(x))] = f'(g(x)) \\cdot g'(x)$
+- **Product Rule**: $(uv)' = u'v + uv'$
+- **Quotient Rule**: $(\\frac{u}{v})' = \\frac{u'v - uv'}{v^2}$
+
+## 2. Standard Integrals
+- $\\int x^n dx = \\frac{x^{n+1}}{n+1} + C \\quad (n \\neq -1)$
+- $\\int \\frac{1}{x} dx = \\ln|x| + C$
+- $\\int e^{ax} dx = \\frac{1}{a}e^{ax} + C$
+- $\\int \\sin(ax) dx = -\\frac{1}{a}\\cos(ax) + C$
+- $\\int \\cos(ax) dx = \\frac{1}{a}\\sin(ax) + C$
+
+## 3. Integration by Parts
+$$\\int u \\cdot v \\, dx = u \\int v \\, dx - \\int \\left( u' \\int v \\, dx \\right) dx$$`,
+        authorName: 'Prof. Marcus Vance',
+        authorRole: 'TEACHER',
+        uploadedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
+        allowOfflineDownload: true,
+        viewCount: 48,
+      },
+      {
+        id: 'mat-02',
+        title: 'Electromagnetic Induction & Alternating Current (AC) Notes',
+        description: 'Faraday’s laws of induction, Lenz’s Law, self & mutual inductance, LCR series circuit impedance diagrams.',
+        type: 'PDF',
+        schoolId: 'sch-greenwood-01',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        subject: 'Physics',
+        chapterOrUnit: 'Chapter 6 & 7: Electromagnetism',
+        fileName: 'Physics_EMI_and_AC_Notes.pdf',
+        fileSizeBytes: 3120000,
+        contentMarkdown: `# Electromagnetic Induction (EMI) & AC Notes
+## Faraday's Laws
+1. Whenever the magnetic flux linked with a circuit changes, an induced electromotive force (EMF) is set up in it.
+2. The magnitude of induced EMF is directly proportional to the rate of change of magnetic flux:
+   $$\\mathcal{E} = -N \\frac{d\\Phi_B}{dt}$$
+
+## Lenz's Law
+The polarity of induced EMF is always such that it tends to produce a current which opposes the change in magnetic flux that produces it (Conservation of Energy).
+
+## LCR Series Resonance
+At resonance frequency:
+$$f_r = \\frac{1}{2\\pi \\sqrt{LC}}$$
+Impedance is minimum: $Z = R$.`,
+        authorName: 'Dr. Eleanor Wright',
+        authorRole: 'TEACHER',
+        uploadedAt: new Date(Date.now() - 86400000 * 4).toISOString(),
+        allowOfflineDownload: true,
+        viewCount: 62,
+      },
+      {
+        id: 'mat-03',
+        title: 'Coordination Compounds & Transition Metals Reaction Mechanisms',
+        description: 'Crystal Field Theory (CFT), IUPAC naming of coordination complexes, isomerism, and color transitions in d-block.',
+        type: 'PDF',
+        schoolId: 'sch-greenwood-01',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        subject: 'Chemistry',
+        chapterOrUnit: 'Chapter 9: Inorganic Chemistry',
+        fileName: 'Coordination_Compounds_Class12.pdf',
+        fileSizeBytes: 1890000,
+        contentMarkdown: `# Coordination Chemistry Study Guide
+## IUPAC Nomenclature Rules
+1. Name the cation first, then the anion.
+2. Within the coordination sphere, name ligands in alphabetical order before the central metal atom.
+3. Use prefixes: di, tri, tetra, penta, hexa (or bis, tris for polydentate ligands).
+4. Oxidation state of central metal is indicated in Roman numerals in parentheses.
+
+## Crystal Field Splitting (Octahedral)
+- d-orbitals split into two sets: lower energy $t_{2g}$ ($d_{xy}, d_{yz}, d_{zx}$) and higher energy $e_g$ ($d_{x^2-y^2}, d_{z^2}$).
+- Splitting energy $\\Delta_o$.
+- Strong field ligands (e.g. $CN^-, CO$) cause pairing before filling $e_g$.`,
+        authorName: 'Prof. Marcus Vance',
+        authorRole: 'TEACHER',
+        uploadedAt: new Date(Date.now() - 86400000 * 1).toISOString(),
+        allowOfflineDownload: true,
+        viewCount: 39,
+      },
+      {
+        id: 'mat-04',
+        title: 'Genetics & Molecular Basis of Inheritance Revision Blueprint',
+        description: 'DNA replication mechanisms, transcription, translation, Lac Operon model, and Mendelian dihybrid ratios.',
+        type: 'PDF',
+        schoolId: 'sch-greenwood-01',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        subject: 'Biology',
+        chapterOrUnit: 'Chapter 5 & 6: Genetics',
+        fileName: 'Biology_Molecular_Inheritance.pdf',
+        fileSizeBytes: 4200000,
+        contentMarkdown: `# Molecular Basis of Inheritance
+## Structure of DNA
+- Double helix model proposed by Watson & Crick (1953).
+- Antiparallel strands ($5' \\to 3'$ and $3' \\to 5'$).
+- Complementary base pairing: $A = T$ (2 hydrogen bonds), $G \\equiv C$ (3 hydrogen bonds).
+
+## Central Dogma of Molecular Biology
+$$\\text{DNA} \\xrightarrow{\\text{Transcription}} \\text{mRNA} \\xrightarrow{\\text{Translation}} \\text{Protein}$$`,
+        authorName: 'Sarah Jenkins',
+        authorRole: 'SUPER_ADMIN',
+        uploadedAt: new Date(Date.now() - 86400000 * 5).toISOString(),
+        allowOfflineDownload: true,
+        viewCount: 51,
+      },
+      {
+        id: 'mat-05',
+        title: 'Class X: Quadratic Equations & Arithmetic Progressions Practice Sheet',
+        description: 'Standard quadratic formula, discriminant nature of roots, sum of nth terms of an AP with step-by-step solutions.',
+        type: 'PDF',
+        schoolId: 'sch-greenwood-01',
+        classId: 'cls-10-a',
+        className: 'Class X-A',
+        subject: 'Mathematics',
+        chapterOrUnit: 'Chapter 4 & 5',
+        fileName: 'Class_10_Quadratic_and_AP_Notes.pdf',
+        fileSizeBytes: 1450000,
+        contentMarkdown: `# Class X Mathematics Study Notes
+## Quadratic Equation
+Standard form: $ax^2 + bx + c = 0 \\quad (a \\neq 0)$
+Discriminant: $D = b^2 - 4ac$
+- If $D > 0$: Two distinct real roots
+- If $D = 0$: Two equal real roots ($-b/2a$)
+- If $D < 0$: No real roots
+
+## Arithmetic Progression (AP)
+- $n^{\\text{th}}$ term: $a_n = a + (n - 1)d$
+- Sum of $n$ terms: $S_n = \\frac{n}{2}[2a + (n - 1)d] = \\frac{n}{2}(a + l)$`,
+        authorName: 'Prof. Marcus Vance',
+        authorRole: 'TEACHER',
+        uploadedAt: new Date(Date.now() - 86400000 * 3).toISOString(),
+        allowOfflineDownload: true,
+        viewCount: 34,
+      },
+      {
+        id: 'mat-06',
+        title: 'Computer Science: Python Data Structures & Algorithmic Complexity',
+        description: 'Lists, Tuples, Dictionaries, Stack/Queue operations, recursion, Big-O notation reference chart.',
+        type: 'PDF',
+        schoolId: 'sch-greenwood-01',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        subject: 'Computer Science',
+        chapterOrUnit: 'Unit 2: Data Structures',
+        fileName: 'Python_DataStructures_CS12.pdf',
+        fileSizeBytes: 2100000,
+        contentMarkdown: `# Python Data Structures & Complexity
+## Time Complexity Reference
+- List append / pop(): $O(1)$
+- List search (in): $O(n)$
+- Dictionary lookup / insert: $O(1)$ average
+- Binary search: $O(\\log n)$
+- QuickSort / MergeSort: $O(n \\log n)$`,
+        authorName: 'Prof. Marcus Vance',
+        authorRole: 'TEACHER',
+        uploadedAt: new Date(Date.now() - 86400000 * 6).toISOString(),
+        allowOfflineDownload: true,
+        viewCount: 42,
+      },
     ];
   }
 
