@@ -1,7 +1,7 @@
 // EduGuard MDM — Enterprise Top Navigation Header (Clean Minimalism)
 
 import React from 'react';
-import { Radio, Bell, Tablet, Monitor, RefreshCw, LogOut, ExternalLink } from 'lucide-react';
+import { Radio, Bell, Tablet, Monitor, RefreshCw, LogOut, ExternalLink, LockOpen } from 'lucide-react';
 import { NavSection } from './Sidebar';
 import { AdminUser } from '../types/mdm';
 
@@ -17,6 +17,8 @@ interface HeaderProps {
   isRefreshing: boolean;
   sseConnected: boolean;
   criticalViolationsCount: number;
+  pendingExitRequestsCount?: number;
+  onOpenExitRequestsModal?: () => void;
   onSelectSection: (section: NavSection) => void;
   onLogout?: () => void;
 }
@@ -50,6 +52,8 @@ export const Header: React.FC<HeaderProps> = ({
   isRefreshing,
   sseConnected,
   criticalViolationsCount,
+  pendingExitRequestsCount = 0,
+  onOpenExitRequestsModal,
   onSelectSection,
   onLogout,
 }) => {
@@ -94,6 +98,24 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className="h-6 w-[1px] bg-gray-100 mx-1 hidden sm:block" />
+
+        {/* Kiosk Exit Approvals Button */}
+        {onOpenExitRequestsModal && (
+          <button
+            onClick={onOpenExitRequestsModal}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer shadow-xs ${
+              pendingExitRequestsCount > 0
+                ? 'bg-amber-500 hover:bg-amber-600 text-white animate-pulse'
+                : 'bg-white hover:bg-gray-50 text-gray-700 border border-gray-200'
+            }`}
+            title="Review student kiosk exit requests and password unlocks"
+          >
+            <LockOpen className="w-3.5 h-3.5" />
+            <span>
+              {pendingExitRequestsCount > 0 ? `${pendingExitRequestsCount} Exit Requests` : 'Exit Approvals'}
+            </span>
+          </button>
+        )}
 
         {/* Refresh Button */}
         <button

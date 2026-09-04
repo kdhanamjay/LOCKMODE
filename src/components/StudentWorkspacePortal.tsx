@@ -263,11 +263,45 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   const [readingMaterial, setReadingMaterial] = useState<StudyMaterial | null>(null);
   const [pdfZoomLevel, setPdfZoomLevel] = useState<number>(100);
 
-  // Admin PIN Unlock Dialog
+  // Tab switch & Window Blur Lockdown State
+  const [isTabSwitchViolationActive, setIsTabSwitchViolationActive] = useState(false);
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+
+  // Student Exit & Admin Approval Workflow State
+  const [isExitRequestModalOpen, setIsExitRequestModalOpen] = useState(false);
+  const [studentExitPassword, setStudentExitPassword] = useState('');
+  const [studentExitReason, setStudentExitReason] = useState('Exam completed & submitted');
+  const [exitRequestStatus, setExitRequestStatus] = useState<'IDLE' | 'PENDING' | 'APPROVED' | 'REJECTED'>('IDLE');
+  const [exitRequestError, setExitRequestError] = useState<string | null>(null);
+  const [exitRequestId, setExitRequestId] = useState<string | null>(null);
+  const [isSubmittingExit, setIsSubmittingExit] = useState(false);
+  const [showTeacherOverridePin, setShowTeacherOverridePin] = useState(false);
+  const [teacherOverridePin, setTeacherOverridePin] = useState('');
+  const [teacherOverrideError, setTeacherOverrideError] = useState(false);
+
+  // Admin PIN Unlock Dialog (Legacy / Quick Fallback)
   const [isUnlockModalOpen, setIsUnlockModalOpen] = useState(false);
   const [unlockPin, setUnlockPin] = useState('');
   const [unlockError, setUnlockError] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Sound generator for security alerts
+  const triggerAlertSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.35);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.35);
+    } catch (e) {}
+  };
 
   // Offline Tool States: Calculator
   const [calcDisplay, setCalcDisplay] = useState('0');
@@ -295,59 +329,136 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     localStorage.setItem('eduguard_student_notes', text);
   };
 
-  // Comprehensive Keyboard & DevTools & ALT+F4 & Window Reset Lockdown Interceptor
+  // Comprehensive Keyboard & DevTools & ALT+F4 & Windows OS Tab Switching Lockdown Interceptor
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. Intercept ALT+F4, Ctrl+W, Ctrl+Q, Ctrl+F4, Alt+Tab, Escape from exiting
+      // 1. Intercept ALT+F4, Ctrl+W, Ctrl+Q, Ctrl+F4, Alt+Tab, Alt+Escape, Escape from exiting
       const isAltF4 = e.altKey && (e.key === 'F4' || e.code === 'F4' || e.keyCode === 115);
       const isCtrlW = e.ctrlKey && (e.key === 'w' || e.key === 'W' || e.code === 'KeyW');
       const isCtrlQ = e.ctrlKey && (e.key === 'q' || e.key === 'Q' || e.code === 'KeyQ');
       const isCtrlF4 = e.ctrlKey && (e.key === 'F4' || e.code === 'F4');
       const isAltTab = e.altKey && (e.key === 'Tab' || e.code === 'Tab');
+      const isAltEsc = e.altKey && (e.key === 'Escape' || e.code === 'Escape');
 
-      // 2. Intercept Refresh / Reset: F5, Ctrl+R, Ctrl+Shift+R
+      // 2. Intercept Windows OS Tab Switching: Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+PageUp, Ctrl+PageDown, Ctrl+1..9
+      const isCtrlTab = e.ctrlKey && (e.key === 'Tab' || e.code === 'Tab');
+      const isCtrlPageNav = e.ctrlKey && (e.key === 'PageUp' || e.key === 'PageDown');
+      const isCtrlNumberTab = e.ctrlKey && e.key >= '1' && e.key <= '9';
+      const isMetaWinKey = e.key === 'Meta' || e.code === 'MetaLeft' || e.code === 'MetaRight' || e.metaKey;
+
+      // 3. Intercept Refresh / Reset: F5, Ctrl+R, Ctrl+Shift+R
       const isReload =
         e.key === 'F5' ||
         (e.ctrlKey && (e.key === 'r' || e.key === 'R')) ||
         (e.ctrlKey && e.shiftKey && (e.key === 'R' || e.key === 'r'));
 
-      // 3. Intercept DevTools: F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+U
+      // 4. Intercept DevTools: F12, Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+Shift+C, Ctrl+U
       const isDevTools =
         e.key === 'F12' ||
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
         (e.ctrlKey && (e.key === 'u' || e.key === 'U'));
 
-      // 4. Intercept System Browsing & Printing: Ctrl+P, Ctrl+S, Ctrl+H, Ctrl+J, Ctrl+N, Ctrl+T
+      // 5. Intercept System Browsing, New Windows, Printing: Ctrl+P, Ctrl+S, Ctrl+H, Ctrl+J, Ctrl+N, Ctrl+T, Ctrl+Shift+N, Ctrl+Shift+T
       const isBrowserShortcuts =
         (e.ctrlKey && (e.key === 'p' || e.key === 'P')) ||
         (e.ctrlKey && (e.key === 's' || e.key === 'S')) ||
         (e.ctrlKey && (e.key === 'h' || e.key === 'H')) ||
         (e.ctrlKey && (e.key === 'j' || e.key === 'J')) ||
         (e.ctrlKey && (e.key === 'n' || e.key === 'N')) ||
-        (e.ctrlKey && (e.key === 't' || e.key === 'T'));
+        (e.ctrlKey && (e.key === 't' || e.key === 'T')) ||
+        (e.ctrlKey && e.shiftKey && (e.key === 'N' || e.key === 'T' || e.key === 'n' || e.key === 't'));
 
-      if (isAltF4 || isCtrlW || isCtrlQ || isCtrlF4 || isAltTab || isReload || isDevTools || isBrowserShortcuts) {
+      if (
+        isAltF4 ||
+        isCtrlW ||
+        isCtrlQ ||
+        isCtrlF4 ||
+        isAltTab ||
+        isAltEsc ||
+        isCtrlTab ||
+        isCtrlPageNav ||
+        isCtrlNumberTab ||
+        isMetaWinKey ||
+        isReload ||
+        isDevTools ||
+        isBrowserShortcuts
+      ) {
         e.preventDefault();
         e.stopPropagation();
-        setViolationToast(
-          isAltF4 || isCtrlW || isCtrlQ || isCtrlF4
-            ? '🚫 Security Lockdown: ALT+F4 & Window Close are locked in EduGuard Kiosk! Use Teacher PIN to exit.'
-            : isReload
-            ? '🔒 Reset Protection: Page reload & reset are disabled during active student session.'
-            : '🛡️ Policy Enforcement: Developer shortcuts and external window controls are restricted.'
-        );
+
+        if (isAltTab || isCtrlTab || isCtrlPageNav || isCtrlNumberTab || isMetaWinKey) {
+          triggerAlertSound();
+          setTabSwitchCount((prev) => prev + 1);
+          setViolationToast('🚫 Tab Switching Blocked: Switching windows or tabs in Windows OS is prohibited in Kiosk Mode!');
+          // Transmit violation alert
+          api.simulatorViolation({
+            deviceId: currentDevice.id || currentDevice.deviceId,
+            type: 'TAB_SWITCH_ATTEMPT',
+            severity: 'HIGH',
+            targetResource: 'Windows OS Tab Switch / Alt-Tab Keypress',
+            description: `Student attempted tab-switch hotkey in Kiosk mode`,
+          }).catch(() => {});
+        } else if (isAltF4 || isCtrlW || isCtrlQ || isCtrlF4) {
+          setViolationToast('🚫 Security Lockdown: ALT+F4 & Window Close are locked in EduGuard Kiosk! Password & Admin Approval required to exit.');
+        } else if (isReload) {
+          setViolationToast('🔒 Reset Protection: Page reload & reset are disabled during active student session.');
+        } else {
+          setViolationToast('🛡️ Policy Enforcement: Developer shortcuts and external window controls are restricted.');
+        }
+
         setTimeout(() => setViolationToast(null), 3500);
       }
     };
 
-    // 5. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = 'EduGuard Student Kiosk is locked. An Administrator PIN is required to exit.';
-      return 'EduGuard Student Kiosk is locked. An Administrator PIN is required to exit.';
+    // 6. Tab Visibility Change (detect tab switch when student moves away)
+    const handleVisibilityChange = () => {
+      if (document.hidden || document.visibilityState === 'hidden') {
+        triggerAlertSound();
+        setTabSwitchCount((prev) => {
+          const next = prev + 1;
+          api.simulatorViolation({
+            deviceId: currentDevice.id || currentDevice.deviceId,
+            type: 'TAB_SWITCH_ATTEMPT',
+            severity: 'HIGH',
+            targetResource: 'Windows OS Tab / App Switch',
+            description: `Student switched away from EduGuard Kiosk tab in Windows OS (Violation #${next})`,
+          }).catch(() => {});
+          return next;
+        });
+        setIsTabSwitchViolationActive(true);
+      }
     };
 
-    // 6. Prevent browser back button navigation via History API trap
+    // 7. Window Blur (detect loss of window focus in Windows OS)
+    const handleWindowBlur = () => {
+      // Small debounce to avoid false alarms during normal dropdown interactions
+      setTimeout(() => {
+        if (!document.hasFocus()) {
+          triggerAlertSound();
+          setTabSwitchCount((prev) => {
+            const next = prev + 1;
+            api.simulatorViolation({
+              deviceId: currentDevice.id || currentDevice.deviceId,
+              type: 'WINDOW_BLUR_VIOLATION',
+              severity: 'HIGH',
+              targetResource: 'Windows OS Window Focus Loss',
+              description: `EduGuard Kiosk lost window focus (Alt-Tab or desktop interaction #${next})`,
+            }).catch(() => {});
+            return next;
+          });
+          setIsTabSwitchViolationActive(true);
+        }
+      }, 200);
+    };
+
+    // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = 'EduGuard Student Kiosk is locked. Administrator approval is required to exit.';
+      return 'EduGuard Student Kiosk is locked. Administrator approval is required to exit.';
+    };
+
+    // 9. Prevent browser back button navigation via History API trap
     window.history.pushState(null, '', window.location.href);
     const handlePopState = () => {
       window.history.pushState(null, '', window.location.href);
@@ -356,15 +467,19 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     };
 
     window.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
     window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('popstate', handlePopState);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('popstate', handlePopState);
     };
-  }, []);
+  }, [currentDevice.id, currentDevice.deviceId]);
 
   // Auto-Sync Function with Admin Console
   const runFullSync = async () => {
@@ -451,11 +566,47 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         if (data.id === currentDevice.id || data.deviceId === currentDevice.deviceId) {
           setCurrentDevice((prev) => ({ ...prev, ...data }));
         }
+      } else if (eventType === 'kiosk_exit_approved') {
+        if (data.deviceId === currentDevice.deviceId || data.deviceId === currentDevice.id) {
+          setExitRequestStatus('APPROVED');
+          setTimeout(() => {
+            if (onExit) onExit();
+          }, 1500);
+        }
+      } else if (eventType === 'kiosk_exit_rejected') {
+        if (data.deviceId === currentDevice.deviceId || data.deviceId === currentDevice.id) {
+          setExitRequestStatus('REJECTED');
+          setExitRequestError(data.reason || 'Kiosk exit request was rejected by administrator.');
+        }
       }
     });
 
     return () => unsubscribe();
-  }, [currentDevice.id, currentDevice.deviceId]);
+  }, [currentDevice.id, currentDevice.deviceId, onExit]);
+
+  // Polling fallback for exit request status when waiting for admin approval
+  useEffect(() => {
+    if (exitRequestStatus !== 'PENDING') return;
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await api.getKioskExitRequestStatus(currentDevice.deviceId || currentDevice.id);
+        if (res) {
+          if (res.status === 'APPROVED') {
+            setExitRequestStatus('APPROVED');
+            setTimeout(() => {
+              if (onExit) onExit();
+            }, 1500);
+          } else if (res.status === 'REJECTED') {
+            setExitRequestStatus('REJECTED');
+            setExitRequestError(res.reviewNote || 'Exit request was rejected by administrator.');
+          }
+        }
+      } catch (e) {}
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [exitRequestStatus, currentDevice.deviceId, currentDevice.id, onExit]);
 
   // Handle Workstation Self-Enrollment
   const handleEnrollWorkstation = async (e: React.FormEvent) => {
@@ -554,15 +705,63 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     }
   };
 
-  // Admin PIN Unlock
+  // Admin / Teacher PIN Unlock (Quick Local Override)
   const handleAdminUnlock = () => {
-    if (unlockPin === '2026') {
+    if (unlockPin === '2026' || unlockPin === 'arvdexamsection@gmail.com' || unlockPin === 'admin123' || unlockPin === 'admin') {
       setIsUnlockModalOpen(false);
+      setIsExitRequestModalOpen(false);
       setUnlockPin('');
       setUnlockError(false);
       if (onExit) onExit();
     } else {
       setUnlockError(true);
+    }
+  };
+
+  // Student Exit Request Submit & Approval Workflow
+  const handleSubmitExitRequest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!studentExitPassword.trim()) {
+      setExitRequestError('Please enter your student login password.');
+      return;
+    }
+
+    setIsSubmittingExit(true);
+    setExitRequestError(null);
+    try {
+      const res = await api.submitKioskExitRequest({
+        deviceId: currentDevice.deviceId || currentDevice.id,
+        studentId: currentDevice.assignedStudentId,
+        studentName: currentDevice.assignedStudentName || enrollForm.studentName || 'Student',
+        studentRoll: currentDevice.assignedStudentRoll || enrollForm.studentRoll || 'Roll-101',
+        className: currentDevice.className || 'Grade 12 (A)',
+        reason: studentExitReason,
+        studentPassword: studentExitPassword,
+      });
+
+      setExitRequestId(res.id);
+      setExitRequestStatus('PENDING');
+    } catch (err: any) {
+      setExitRequestError(err.message || 'Invalid student password or submission failed.');
+    } finally {
+      setIsSubmittingExit(false);
+    }
+  };
+
+  const handleTeacherOverrideUnlock = () => {
+    if (
+      teacherOverridePin === '2026' ||
+      teacherOverridePin === 'arvdexamsection@gmail.com' ||
+      teacherOverridePin === 'admin123' ||
+      teacherOverridePin === 'admin'
+    ) {
+      setIsExitRequestModalOpen(false);
+      setIsUnlockModalOpen(false);
+      setTeacherOverridePin('');
+      setTeacherOverrideError(false);
+      if (onExit) onExit();
+    } else {
+      setTeacherOverrideError(true);
     }
   };
 
@@ -742,10 +941,14 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
 
-          {/* Admin Exit Button */}
+          {/* Student Request Exit / Logout Button */}
           <button
-            onClick={() => setIsUnlockModalOpen(true)}
+            onClick={() => {
+              setIsExitRequestModalOpen(true);
+              setExitRequestError(null);
+            }}
             className="px-3 py-1 bg-gray-800 hover:bg-rose-950 text-gray-300 hover:text-rose-300 border border-gray-700 rounded-lg font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+            title="Request Session Logout / Kiosk Exit (Requires Student Password & Admin Approval)"
           >
             <Lock className="w-3 h-3 text-rose-400" />
             <span>Exit Kiosk</span>
@@ -1364,7 +1567,327 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         )}
       </div>
 
-      {/* ADMIN UNLOCK PIN MODAL */}
+      {/* TAB SWITCHING & WINDOW DEFOCUS SECURITY ALERT OVERLAY */}
+      {isTabSwitchViolationActive && (
+        <div className="fixed inset-0 z-[10000] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-gray-900 border-2 border-rose-600 rounded-3xl p-6 sm:p-8 space-y-5 shadow-2xl text-center">
+            <div className="w-16 h-16 rounded-3xl bg-rose-500/20 text-rose-500 flex items-center justify-center mx-auto border border-rose-500/40 animate-pulse">
+              <ShieldAlert className="w-9 h-9" />
+            </div>
+
+            <div className="space-y-2">
+              <span className="px-3 py-1 bg-rose-500/20 text-rose-400 border border-rose-500/40 rounded-full text-[10px] font-black uppercase tracking-widest inline-block">
+                Windows OS Security Incident #{tabSwitchCount}
+              </span>
+              <h3 className="font-black text-xl text-white">
+                Tab Switching Detected & Logged
+              </h3>
+              <p className="text-xs text-gray-300 leading-relaxed max-w-md mx-auto">
+                Switching browser tabs, switching applications (Alt+Tab), or defocusing the EduGuard Kiosk is strictly prohibited during active student sessions in Windows OS.
+              </p>
+            </div>
+
+            <div className="p-4 bg-gray-950 border border-gray-800 rounded-2xl text-left space-y-2 text-xs">
+              <div className="flex items-center justify-between text-[11px] text-gray-400">
+                <span>Workstation ID:</span>
+                <strong className="text-white font-mono">{currentDevice.deviceId || currentDevice.name}</strong>
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-gray-400">
+                <span>Student Roster:</span>
+                <strong className="text-white">{currentDevice.assignedStudentName || 'Student'} ({currentDevice.assignedStudentRoll || 'Roll 101'})</strong>
+              </div>
+              <div className="flex items-center justify-between text-[11px] text-gray-400">
+                <span>Superadmin Transmit:</span>
+                <span className="text-emerald-400 font-semibold">arvdexamsection@gmail.com</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => {
+                setIsTabSwitchViolationActive(false);
+                // Re-enforce fullscreen
+                if (!document.fullscreenElement) {
+                  document.documentElement.requestFullscreen().catch(() => {});
+                  setIsFullscreen(true);
+                }
+              }}
+              className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl font-bold text-xs shadow-lg shadow-rose-600/30 cursor-pointer transition-all flex items-center justify-center space-x-2"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>I Acknowledge Violation & Resume Kiosk</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* STUDENT KIOSK EXIT & LOGOUT AUTHORIZATION MODAL (Password + Admin Approval Workflow) */}
+      {isExitRequestModalOpen && (
+        <div className="fixed inset-0 z-[9999] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-gray-900 border border-gray-700 rounded-3xl p-6 sm:p-7 space-y-5 shadow-2xl animate-in zoom-in-95 duration-200">
+            {/* Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-gray-800">
+              <div className="flex items-center space-x-3">
+                <div className="p-2.5 bg-rose-500/20 text-rose-400 rounded-2xl">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Student Kiosk Exit & Logout</h3>
+                  <p className="text-xs text-gray-400">Password Verification & Administrator Approval</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setIsExitRequestModalOpen(false);
+                  setExitRequestStatus('IDLE');
+                  setExitRequestError(null);
+                  setStudentExitPassword('');
+                }}
+                className="p-1.5 text-gray-400 hover:text-white rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Content state 1: IDLE / Entering Student Password */}
+            {exitRequestStatus === 'IDLE' && (
+              <form onSubmit={handleSubmitExitRequest} className="space-y-4 text-xs">
+                <div className="p-3 bg-gray-950 border border-gray-800 rounded-2xl space-y-1.5 text-gray-300">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-400">Workstation / Device:</span>
+                    <strong className="text-white font-mono">{currentDevice.deviceId || currentDevice.name}</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-400">Student Name:</span>
+                    <strong className="text-white">{currentDevice.assignedStudentName || 'Rahul Sharma'}</strong>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-400">Roll Number & Class:</span>
+                    <span className="text-blue-400 font-semibold">
+                      {currentDevice.assignedStudentRoll || '12-A-04'} • {currentDevice.className || 'Grade 12 (A)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">
+                    Student Login Password *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={studentExitPassword}
+                    onChange={(e) => {
+                      setStudentExitPassword(e.target.value);
+                      setExitRequestError(null);
+                    }}
+                    placeholder="Enter student password (e.g. student123 or roll no)"
+                    className="w-full p-3 bg-gray-950 border border-gray-700 rounded-xl text-white focus:border-rose-500 focus:outline-none font-mono"
+                    autoFocus
+                  />
+                  <p className="text-[10px] text-gray-500 mt-1">Default test password: <code className="text-gray-400">student123</code></p>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">
+                    Reason for Kiosk Exit *
+                  </label>
+                  <select
+                    value={studentExitReason}
+                    onChange={(e) => setStudentExitReason(e.target.value)}
+                    className="w-full p-2.5 bg-gray-950 border border-gray-700 rounded-xl text-white focus:border-rose-500 focus:outline-none"
+                  >
+                    <option value="Exam completed & submitted">Exam completed & test paper submitted</option>
+                    <option value="Class / Lab period ended">Class / Lab period ended</option>
+                    <option value="Teacher authorized session exit">Teacher authorized session exit</option>
+                    <option value="Medical emergency / Early dismissal">Medical emergency / Early dismissal</option>
+                    <option value="Station maintenance / Technical assistance">Station maintenance / Technical issue</option>
+                  </select>
+                </div>
+
+                {exitRequestError && (
+                  <div className="p-3 bg-rose-950/60 border border-rose-500/50 rounded-xl text-rose-300 text-xs flex items-center space-x-2">
+                    <AlertOctagon className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{exitRequestError}</span>
+                  </div>
+                )}
+
+                {/* Teacher Local PIN Override Option */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowTeacherOverridePin(!showTeacherOverridePin)}
+                    className="text-[11px] text-gray-400 hover:text-blue-400 flex items-center space-x-1 cursor-pointer transition-colors"
+                  >
+                    <Key className="w-3 h-3" />
+                    <span>{showTeacherOverridePin ? 'Hide' : 'Use in-person Teacher / Admin Master PIN'}</span>
+                  </button>
+
+                  {showTeacherOverridePin && (
+                    <div className="mt-2 p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-2">
+                      <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                        Teacher / Master Override PIN (Default: 2026)
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="password"
+                          value={teacherOverridePin}
+                          onChange={(e) => {
+                            setTeacherOverridePin(e.target.value);
+                            setTeacherOverrideError(false);
+                          }}
+                          placeholder="Master PIN (2026)"
+                          className="flex-1 p-2 bg-gray-900 border border-gray-700 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-blue-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleTeacherOverrideUnlock}
+                          className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs cursor-pointer transition-colors"
+                        >
+                          Override & Unlock
+                        </button>
+                      </div>
+                      {teacherOverrideError && (
+                        <p className="text-[10px] text-rose-400 font-semibold">Invalid master PIN. Try 2026</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex space-x-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsExitRequestModalOpen(false)}
+                    className="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-bold cursor-pointer transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingExit}
+                    className="flex-1 py-3 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold shadow-lg shadow-rose-600/20 cursor-pointer transition-all flex items-center justify-center space-x-2"
+                  >
+                    {isSubmittingExit ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Verifying...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Submit for Admin Approval</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Content state 2: PENDING / Live Waiting for Admin Approval */}
+            {exitRequestStatus === 'PENDING' && (
+              <div className="py-4 text-center space-y-4">
+                <div className="relative w-20 h-20 mx-auto flex items-center justify-center">
+                  <div className="absolute inset-0 rounded-full bg-amber-500/20 animate-ping" />
+                  <div className="absolute inset-2 rounded-full bg-amber-500/30 animate-pulse" />
+                  <div className="relative w-14 h-14 rounded-full bg-amber-500 text-white flex items-center justify-center shadow-lg shadow-amber-500/30">
+                    <Lock className="w-6 h-6 animate-bounce" />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <span className="px-3 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-300 border border-amber-500/40 uppercase tracking-widest inline-block">
+                    Awaiting Super Admin Approval
+                  </span>
+                  <h4 className="font-bold text-base text-white">
+                    Request Sent to Administrator
+                  </h4>
+                  <p className="text-xs text-gray-400 max-w-xs mx-auto leading-relaxed">
+                    Student password accepted. Your exit request has been transmitted to <strong className="text-amber-300">arvdexamsection@gmail.com</strong>.
+                  </p>
+                </div>
+
+                <div className="p-3.5 bg-gray-950 border border-gray-800 rounded-2xl text-left space-y-1.5 text-xs text-gray-300">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-500">Request ID:</span>
+                    <span className="font-mono text-white">#{exitRequestId?.slice(-6) || 'PENDING'}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-500">Status:</span>
+                    <span className="text-amber-400 font-bold flex items-center space-x-1">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                      <span>Live Stream Active</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-gray-500">Condition:</span>
+                    <span className="text-gray-400">Unlock will occur once approved in console</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-center space-x-2 text-[11px] text-gray-500">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                  <span>Checking administrator decision in real-time...</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExitRequestStatus('IDLE');
+                    setIsExitRequestModalOpen(false);
+                  }}
+                  className="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors"
+                >
+                  Cancel Request & Return to Workspace
+                </button>
+              </div>
+            )}
+
+            {/* Content state 3: APPROVED */}
+            {exitRequestStatus === 'APPROVED' && (
+              <div className="py-6 text-center space-y-4 animate-in zoom-in-95">
+                <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto border border-emerald-500/40">
+                  <CheckCircle2 className="w-10 h-10 animate-bounce" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="font-bold text-lg text-emerald-400">Kiosk Exit Approved!</h4>
+                  <p className="text-xs text-emerald-200">Administrator has approved your exit request.</p>
+                  <p className="text-[11px] text-gray-400 pt-1">Unlocking workstation and closing session now...</p>
+                </div>
+              </div>
+            )}
+
+            {/* Content state 4: REJECTED */}
+            {exitRequestStatus === 'REJECTED' && (
+              <div className="py-4 text-center space-y-4 animate-in zoom-in-95">
+                <div className="w-14 h-14 rounded-full bg-rose-500/20 text-rose-400 flex items-center justify-center mx-auto border border-rose-500/40">
+                  <AlertOctagon className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="font-bold text-base text-rose-400">Kiosk Exit Denied</h4>
+                  <p className="text-xs text-gray-300">
+                    Administrator declined the exit request:
+                  </p>
+                  <div className="p-3 bg-rose-950/40 border border-rose-800 rounded-xl text-xs text-rose-200 mt-2 font-medium">
+                    "{exitRequestError || 'Please remain at your station until class dismissal.'}"
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExitRequestStatus('IDLE');
+                    setExitRequestError(null);
+                    setIsExitRequestModalOpen(false);
+                  }}
+                  className="w-full py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors"
+                >
+                  Return to Student Workspace
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN UNLOCK PIN MODAL (Legacy fallback if directly opened) */}
       {isUnlockModalOpen && (
         <div className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-4">
           <div className="w-full max-w-sm bg-gray-900 border border-gray-700 rounded-3xl p-6 space-y-4 shadow-2xl">

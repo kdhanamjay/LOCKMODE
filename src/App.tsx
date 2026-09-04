@@ -43,6 +43,8 @@ import { SettingsView } from './components/SettingsView';
 import { StudentDeviceSimulator } from './components/StudentDeviceSimulator';
 import { StudentWorkspacePortal } from './components/StudentWorkspacePortal';
 import { AdminLoginView } from './components/AdminLoginView';
+import { KioskExitApprovalModal } from './components/KioskExitApprovalModal';
+import { KioskExitRequest } from './types/mdm';
 import { ShieldCheck, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
 
 export function App() {
@@ -52,12 +54,13 @@ export function App() {
     return window.location.search.includes('student') || window.location.search.includes('kiosk');
   });
   const [currentUser, setCurrentUser] = useState<AdminUser | null>({
-    id: 'usr-admin-1',
-    email: 'admin@greenwood-high.edu',
-    name: 'Sarah Jenkins',
+    id: 'usr-super-arvd',
+    email: 'arvdexamsection@gmail.com',
+    name: 'ARVD Exam Section Admin',
     role: 'SUPER_ADMIN',
-    schoolId: 'sch-greenwood-01',
-    schoolName: 'Greenwood High School',
+    schoolId: 'sch-demo-01',
+    schoolName: 'Demo International School & Examination Center',
+    permissions: ['*'],
   });
 
   // Core domain state
@@ -77,6 +80,8 @@ export function App() {
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [messages, setMessages] = useState<AdminBroadcastMessage[]>([]);
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
+  const [exitRequests, setExitRequests] = useState<KioskExitRequest[]>([]);
+  const [isExitRequestsModalOpen, setIsExitRequestsModalOpen] = useState<boolean>(false);
   const [settings, setSettings] = useState<SystemRetentionSettings>({
     heartbeatRetentionDays: 30,
     appUsageRetentionDays: 90,
@@ -120,6 +125,7 @@ export function App() {
         settingsData,
         messagesData,
         materialsData,
+        exitRequestsData,
       ] = await Promise.all([
         api.getDashboardStats(),
         api.getDevices(),
@@ -137,6 +143,7 @@ export function App() {
         api.getSettings(),
         api.getMessages(),
         api.getStudyMaterials(),
+        api.getKioskExitRequests().catch(() => []),
       ]);
 
       setStats(statsData);
@@ -156,6 +163,7 @@ export function App() {
       setSettings(settingsData);
       setMessages(messagesData);
       setStudyMaterials(materialsData);
+      setExitRequests(exitRequestsData);
     } catch (err) {
       console.error('Failed to fetch MDM data', err);
     } finally {
@@ -225,6 +233,15 @@ export function App() {
               : m
           )
         );
+      } else if (eventType === 'kiosk_exit_requested') {
+        setExitRequests((prev) => [data, ...prev.filter((r) => r.id !== data.id)]);
+        showToast(`🔑 Kiosk Exit Requested: ${data.studentName} (${data.deviceId})`, 'alert');
+      } else if (eventType === 'kiosk_exit_approved') {
+        setExitRequests((prev) => prev.map((r) => (r.id === data.id ? { ...r, ...data } : r)));
+        showToast(`✅ Approved Kiosk Exit for ${data.studentName || data.deviceId}`);
+      } else if (eventType === 'kiosk_exit_rejected') {
+        setExitRequests((prev) => prev.map((r) => (r.id === data.id ? { ...r, ...data } : r)));
+        showToast(`❌ Rejected Kiosk Exit for ${data.studentName || data.deviceId}`, 'alert');
       } else if (eventType === 'policy_published') {
         showToast(`Policy v${data.policy?.version} published fleet-wide!`);
         loadAllData();
@@ -333,6 +350,28 @@ export function App() {
       loadAllData();
     } catch (e: any) {
       showToast(e.message || 'Failed to resolve violation', 'alert');
+    }
+  };
+
+  const handleApproveExitRequest = async (requestId: string, note?: string) => {
+    try {
+      const res = await api.approveKioskExitRequest(requestId, note);
+      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res.request : r)));
+      showToast(`Kiosk exit approved for ${res.request.studentName || res.request.deviceId}`);
+      loadAllData();
+    } catch (e: any) {
+      showToast(e.message || 'Failed to approve exit request', 'alert');
+    }
+  };
+
+  const handleRejectExitRequest = async (requestId: string, reason?: string) => {
+    try {
+      const res = await api.rejectKioskExitRequest(requestId, reason);
+      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res.request : r)));
+      showToast(`Kiosk exit request rejected`, 'alert');
+      loadAllData();
+    } catch (e: any) {
+      showToast(e.message || 'Failed to reject exit request', 'alert');
     }
   };
 
@@ -480,6 +519,8 @@ export function App() {
           isRefreshing={isRefreshing}
           sseConnected={sseConnected}
           criticalViolationsCount={criticalViolationsCount}
+          pendingExitRequestsCount={exitRequests.filter((r) => r.status === 'PENDING').length}
+          onOpenExitRequestsModal={() => setIsExitRequestsModalOpen(true)}
           onSelectSection={setCurrentSection}
           onLogout={handleLogout}
         />
@@ -629,6 +670,17 @@ export function App() {
           applications={applications}
           usageRecords={usageRecords}
           violations={violations}
+        />
+      )}
+
+      {/* Kiosk Exit Authorization & Approval Modal for Administrator */}
+      {isExitRequestsModalOpen && (
+        <KioskExitApprovalModal
+          requests={exitRequests}
+          onClose={() => setIsExitRequestsModalOpen(false)}
+          onApprove={handleApproveExitRequest}
+          onReject={handleRejectExitRequest}
+          onRefresh={loadAllData}
         />
       )}
 

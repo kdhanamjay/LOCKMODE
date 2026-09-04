@@ -10,7 +10,7 @@ interface AdminLoginViewProps {
 }
 
 export const AdminLoginView: React.FC<AdminLoginViewProps> = ({ onLoginSuccess, onLaunchStudentWorkspace }) => {
-  const [email, setEmail] = useState('admin@greenwood-high.edu');
+  const [email, setEmail] = useState('arvdexamsection@gmail.com');
   const [password, setPassword] = useState('EduGuardSecure2026!');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -115,9 +115,12 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({ onLoginSuccess, 
         {/* Admin Login Card */}
         <div className="bg-white py-7 px-6 sm:px-8 rounded-3xl border border-gray-200/80 shadow-xs space-y-5">
           <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-            <h3 className="font-bold text-xs text-gray-900 uppercase tracking-wider">Administrator Sign In</h3>
-            <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded-full font-semibold">
-              School Staff
+            <div>
+              <h3 className="font-bold text-xs text-gray-900 uppercase tracking-wider">Administrator Sign In</h3>
+              <p className="text-[11px] text-gray-500 mt-0.5">Authorized for <strong className="text-gray-900">arvdexamsection@gmail.com</strong></p>
+            </div>
+            <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 px-2.5 py-0.5 rounded-full font-semibold">
+              Super Admin
             </span>
           </div>
 
@@ -131,7 +134,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({ onLoginSuccess, 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                School Administrator Email
+                Administrator / Superadmin Email
               </label>
               <div className="relative">
                 <input
@@ -139,7 +142,7 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({ onLoginSuccess, 
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@greenwood-high.edu"
+                  placeholder="arvdexamsection@gmail.com"
                   className="w-full px-3.5 py-2.5 bg-gray-50/70 border border-gray-200 rounded-xl text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-gray-950 focus:bg-white transition-all"
                 />
               </div>
@@ -182,35 +185,54 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({ onLoginSuccess, 
               ) : (
                 <>
                   <LogIn className="w-4 h-4" />
-                  <span>Sign In to MDM Admin Console</span>
+                  <span>Sign In as Super Administrator</span>
                 </>
               )}
             </button>
           </form>
 
-          {/* Quick Demo 1-Click Login Roles */}
+          {/* Quick 1-Click Login Roles */}
           <div className="pt-4 border-t border-gray-100">
             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 text-center flex items-center justify-center space-x-1">
               <Sparkles className="w-3 h-3 text-amber-500" />
               <span>1-Click Instant Sign In</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
+            <div className="space-y-2 text-[11px]">
               <button
                 type="button"
-                onClick={() => handleQuickSelect('admin@greenwood-high.edu')}
-                className="p-2.5 text-left bg-gray-50 hover:bg-blue-50/80 hover:border-blue-200 rounded-xl border border-gray-200/60 transition-colors cursor-pointer"
+                onClick={() => handleQuickSelect('arvdexamsection@gmail.com')}
+                className="w-full p-2.5 text-left bg-emerald-50/60 hover:bg-emerald-50 hover:border-emerald-300 rounded-xl border border-emerald-200/80 transition-colors cursor-pointer flex items-center justify-between"
               >
-                <div className="font-semibold text-gray-900 truncate">Sarah Jenkins</div>
-                <div className="text-[9px] text-blue-600 uppercase font-bold mt-0.5">Super Admin (1-Click)</div>
+                <div>
+                  <div className="font-semibold text-emerald-950 flex items-center space-x-1.5">
+                    <span>ARVD Exam Section</span>
+                    <span className="text-[9px] px-1.5 py-0.2 bg-emerald-600 text-white rounded font-bold">PRIMARY</span>
+                  </div>
+                  <div className="text-[10px] text-emerald-700 font-mono">arvdexamsection@gmail.com</div>
+                </div>
+                <div className="text-[9px] text-emerald-800 uppercase font-bold bg-emerald-100/80 px-2 py-0.5 rounded-md">
+                  Super Admin
+                </div>
               </button>
-              <button
-                type="button"
-                onClick={() => handleQuickSelect('marcus.vance@greenwood.edu')}
-                className="p-2.5 text-left bg-gray-50 hover:bg-purple-50/80 hover:border-purple-200 rounded-xl border border-gray-200/60 transition-colors cursor-pointer"
-              >
-                <div className="font-semibold text-gray-900 truncate">Marcus Vance</div>
-                <div className="text-[9px] text-purple-600 uppercase font-bold mt-0.5">IT Lead (1-Click)</div>
-              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleQuickSelect('admin@greenwood-high.edu')}
+                  className="p-2 text-left bg-gray-50 hover:bg-blue-50/80 hover:border-blue-200 rounded-xl border border-gray-200/60 transition-colors cursor-pointer"
+                >
+                  <div className="font-semibold text-gray-900 truncate">Sarah Jenkins</div>
+                  <div className="text-[9px] text-blue-600 uppercase font-bold mt-0.5">School Admin</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleQuickSelect('marcus.vance@greenwood.edu')}
+                  className="p-2 text-left bg-gray-50 hover:bg-purple-50/80 hover:border-purple-200 rounded-xl border border-gray-200/60 transition-colors cursor-pointer"
+                >
+                  <div className="font-semibold text-gray-900 truncate">Marcus Vance</div>
+                  <div className="text-[9px] text-purple-600 uppercase font-bold mt-0.5">IT Lead</div>
+                </button>
+              </div>
             </div>
           </div>
         </div>

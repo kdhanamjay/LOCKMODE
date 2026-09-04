@@ -299,7 +299,10 @@ export type ViolationType =
   | 'DEVELOPER_OPTIONS_ENABLED'
   | 'VPN_DISCONNECTED_UNEXPECTEDLY'
   | 'FACTORY_RESET_ATTEMPT'
-  | 'ENROLLMENT_COMPLIANCE_FAILED';
+  | 'ENROLLMENT_COMPLIANCE_FAILED'
+  | 'TAB_SWITCH_ATTEMPT'
+  | 'WINDOW_BLUR_VIOLATION'
+  | 'UNAUTHORIZED_HOTKEY_ATTEMPT';
 
 export interface PolicyViolation {
   id: string;
@@ -318,6 +321,26 @@ export interface PolicyViolation {
   resolvedAt?: string;
   resolvedBy?: string;
   resolutionNote?: string;
+}
+
+export interface KioskExitRequest {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  studentId: string;
+  studentName: string;
+  studentRoll?: string;
+  className: string;
+  schoolId: string;
+  schoolName?: string;
+  platform?: DevicePlatform;
+  requestedAt: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  reason: string;
+  studentPasswordEntered: boolean;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  reviewNote?: string;
 }
 
 export interface AuditLog {

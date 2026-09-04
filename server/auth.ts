@@ -18,10 +18,12 @@ export function requestContextMiddleware(req: AuthenticatedRequest, res: Respons
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
     // Find matching user or fallback to default admin
-    const foundUser = db.adminUsers.find((u) => u.id === token || u.email === token);
+    const foundUser = db.adminUsers.find(
+      (u) => u.id === token || u.email.toLowerCase() === token.toLowerCase()
+    );
     req.user = foundUser || db.adminUsers[0];
   } else {
-    // Default to the logged-in School Admin for ease of use in demo/preview
+    // Default to the logged-in Super Admin for ease of use in demo/preview
     req.user = db.adminUsers[0];
   }
 

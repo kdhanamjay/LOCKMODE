@@ -21,6 +21,7 @@ import {
   AdminUser,
   AdminBroadcastMessage,
   StudyMaterial,
+  KioskExitRequest,
 } from '../src/types/mdm';
 
 class DatabaseStore {
@@ -41,6 +42,7 @@ class DatabaseStore {
   adminUsers: AdminUser[] = [];
   messages: AdminBroadcastMessage[] = [];
   studyMaterials: StudyMaterial[] = [];
+  kioskExitRequests: KioskExitRequest[] = [];
   settings: SystemRetentionSettings = {
     heartbeatRetentionDays: 30,
     appUsageRetentionDays: 90,
@@ -90,6 +92,16 @@ class DatabaseStore {
     // 1. Admin Users
     this.adminUsers = [
       {
+        id: 'usr-super-arvd',
+        name: 'ARVD Exam Section Admin',
+        email: 'arvdexamsection@gmail.com',
+        role: 'SUPER_ADMIN',
+        schoolId: 'sch-demo-01',
+        schoolName: 'Demo International School & Examination Center',
+        permissions: ['*'],
+        lastLogin: new Date().toISOString(),
+      },
+      {
         id: 'usr-admin-1',
         name: 'Sarah Jenkins',
         email: 'admin@school.edu',
@@ -100,12 +112,32 @@ class DatabaseStore {
         lastLogin: new Date().toISOString(),
       },
       {
+        id: 'usr-admin-greenwood',
+        name: 'Sarah Jenkins',
+        email: 'admin@greenwood-high.edu',
+        role: 'SUPER_ADMIN',
+        schoolId: 'sch-demo-01',
+        schoolName: 'Greenwood High School',
+        permissions: ['*'],
+        lastLogin: new Date().toISOString(),
+      },
+      {
         id: 'usr-it-1',
         name: 'Alex Chen',
         email: 'alex.chen@school.edu',
         role: 'IT_ADMIN',
         schoolId: 'sch-demo-01',
         schoolName: 'Demo International School',
+        permissions: ['DEVICES_MANAGE', 'POLICIES_MANAGE', 'APPS_DEPLOY', 'LOGS_VIEW'],
+        lastLogin: new Date(Date.now() - 3600000).toISOString(),
+      },
+      {
+        id: 'usr-it-2',
+        name: 'Marcus Vance',
+        email: 'marcus.vance@greenwood.edu',
+        role: 'IT_ADMIN',
+        schoolId: 'sch-demo-01',
+        schoolName: 'Greenwood High School',
         permissions: ['DEVICES_MANAGE', 'POLICIES_MANAGE', 'APPS_DEPLOY', 'LOGS_VIEW'],
         lastLogin: new Date(Date.now() - 3600000).toISOString(),
       },

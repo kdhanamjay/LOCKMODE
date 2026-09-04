@@ -20,12 +20,13 @@ import {
   AdminUser,
   AdminBroadcastMessage,
   StudyMaterial,
+  KioskExitRequest,
 } from '../types/mdm';
 
 const BASE_URL = '/api';
 
 async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  const token = localStorage.getItem('eduguard_auth_token') || 'usr-admin-1';
+  const token = localStorage.getItem('eduguard_auth_token') || 'usr-super-arvd';
   const response = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
@@ -227,6 +228,37 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // Kiosk Exit Requests & Approval Workflow
+  getKioskExitRequests: async (status?: string) => {
+    const qs = status ? `?status=${status}` : '';
+    return fetchJson<KioskExitRequest[]>(`/kiosk-exit-requests${qs}`);
+  },
+  getKioskExitRequestStatus: async (deviceId: string) =>
+    fetchJson<KioskExitRequest | null>(`/kiosk-exit-requests/status/${encodeURIComponent(deviceId)}`),
+  submitKioskExitRequest: async (data: {
+    deviceId: string;
+    studentId?: string;
+    studentName?: string;
+    studentRoll?: string;
+    className?: string;
+    reason: string;
+    studentPassword: string;
+  }) =>
+    fetchJson<KioskExitRequest>('/kiosk-exit-requests', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  approveKioskExitRequest: async (id: string, note?: string) =>
+    fetchJson<KioskExitRequest>(`/kiosk-exit-requests/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ note }),
+    }),
+  rejectKioskExitRequest: async (id: string, reason?: string) =>
+    fetchJson<KioskExitRequest>(`/kiosk-exit-requests/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }),
 };
 
 // Real-Time Event Subscription (SSE)
@@ -257,6 +289,9 @@ export function subscribeToMdmEvents(onEvent: (eventType: string, data: any) => 
     'message_acknowledged',
     'study_material_uploaded',
     'study_material_deleted',
+    'kiosk_exit_requested',
+    'kiosk_exit_approved',
+    'kiosk_exit_rejected',
   ];
 
   eventTypes.forEach((type) => {
