@@ -356,8 +356,8 @@ export function App() {
   const handleApproveExitRequest = async (requestId: string, note?: string) => {
     try {
       const res = await api.approveKioskExitRequest(requestId, note);
-      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res.request : r)));
-      showToast(`Kiosk exit approved for ${res.request.studentName || res.request.deviceId}`);
+      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res : r)));
+      showToast(`Kiosk exit approved for ${res.studentName || res.deviceId}`);
       loadAllData();
     } catch (e: any) {
       showToast(e.message || 'Failed to approve exit request', 'alert');
@@ -367,7 +367,7 @@ export function App() {
   const handleRejectExitRequest = async (requestId: string, reason?: string) => {
     try {
       const res = await api.rejectKioskExitRequest(requestId, reason);
-      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res.request : r)));
+      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res : r)));
       showToast(`Kiosk exit request rejected`, 'alert');
       loadAllData();
     } catch (e: any) {
