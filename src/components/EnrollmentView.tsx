@@ -155,25 +155,8 @@ timeout /t 3 /nobreak >nul
 goto KIOSK_LOOP
 `;
 
-  // Windows 1-Click .EXE Compiler Batch (Uses built-in csc.exe on every Windows 10/11 machine)
-  const exeCompilerBatchContent = `@echo off
-setlocal enabledelayedexpansion
-title EduGuard MDM - Standalone Executable (.EXE) Creator
-color 0A
-echo ====================================================================
-echo  EduGuard MDM - Standalone Windows 10/11 Executable (.EXE) Builder
-echo ====================================================================
-echo [*] Target Base URL: ${studentKioskUrl}
-echo [*] Compiling EduGuard-Student-Kiosk.exe with Remote Admin Unlock...
-echo.
-
-set "OUT_EXE=%~dp0EduGuard-Student-Kiosk.exe"
-set "CS_FILE=%TEMP%\\EduGuardLauncher.cs"
-
-:: Write C# code using PowerShell to ensure 100% clean UTF-8 escaping
-powershell -NoProfile -Command ^
-  "$code = @'
-using System;
+  // C# Source Code for EduGuard Standalone Kiosk
+  const csharpSourceContent = `using System;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -189,22 +172,22 @@ namespace EduGuardKiosk {
             } catch {}
 
             bool isNew;
-            using (Mutex mutex = new Mutex(true, \"EduGuardKiosk_SingleInstance_Mutex\", out isNew)) {
+            using (Mutex mutex = new Mutex(true, "EduGuardKiosk_SingleInstance_Mutex", out isNew)) {
                 if (!isNew) return;
 
-                string machineId = \"WIN-\" + Environment.MachineName;
-                string url = \"${studentKioskUrl}\";
-                if (url.IndexOf(\"?\") >= 0) {
-                    url += \"&device_id=\" + Uri.EscapeDataString(machineId) + \"&device_name=\" + Uri.EscapeDataString(Environment.MachineName);
+                string machineId = "WIN-" + Environment.MachineName;
+                string url = "${studentKioskUrl}";
+                if (url.IndexOf("?") >= 0) {
+                    url += "&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName);
                 } else {
-                    url += \"?student=true&device_id=\" + Uri.EscapeDataString(machineId) + \"&device_name=\" + Uri.EscapeDataString(Environment.MachineName);
+                    url += "?student=true&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName);
                 }
 
-                string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), \"EduGuardKiosk\", \"BrowserProfile\");
+                string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EduGuardKiosk", "BrowserProfile");
                 try { if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir); } catch {}
 
                 string browser = FindBrowser();
-                string args = \"--kiosk \\\"\" + url + \"\\\" --edge-kiosk-type=fullscreen --user-data-dir=\\\"\" + dataDir + \"\\\" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\";
+                string args = "--kiosk \\\"" + url + "\\\" --edge-kiosk-type=fullscreen --user-data-dir=\\\"" + dataDir + "\\\" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing";
 
                 while (true) {
                     try {
@@ -221,27 +204,23 @@ namespace EduGuardKiosk {
                         // Check if administrator unlocked or removed this specific PC before restarting
                         try {
                             using (WebClient wc = new WebClient()) {
-                                wc.Headers.Add(\"User-Agent\", \"EduGuard-Windows-Kiosk/1.4\");
-                                string checkUrl = \"${currentAppUrl}/api/devices/\" + Uri.EscapeDataString(machineId) + \"/kiosk-status\";
+                                wc.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
+                                string checkUrl = "${currentAppUrl}/api/devices/" + Uri.EscapeDataString(machineId) + "/kiosk-status";
                                 string statusJson = wc.DownloadString(checkUrl);
-                                if (statusJson.IndexOf(\"\\\"isLocked\\\":false\") >= 0 || 
-                                    statusJson.IndexOf(\"\\\"kioskActive\\\":false\") >= 0 || 
-                                    statusJson.IndexOf(\"\\\"isDeleted\\\":true\") >= 0) {
-                                    // Administrator remotely unlocked or deleted device from fleet!
-                                    // Cleanly exit the watchdog process so Windows desktop is fully restored!
+                                if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
+                                    statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0 || 
+                                    statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
                                     return;
                                 }
                             }
                         } catch (WebException wex) {
                             try {
                                 if (wex.Response is HttpWebResponse resp && (resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.Gone)) {
-                                    return; // Device deleted by admin
+                                    return;
                                 }
                             } catch {}
                         } catch (Exception) {}
 
-                        // Anti-rapid-loop protection: if Edge exited in under 4 seconds,
-                        // sleep 8 seconds before retrying (prevents rapid 1-second reload loops)
                         if (runtime.TotalSeconds < 4) {
                             Thread.Sleep(8000);
                         } else {
@@ -258,66 +237,182 @@ namespace EduGuardKiosk {
             try {
                 string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
                 string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-                string e1 = Path.Combine(pf86, @\"Microsoft\\Edge\\Application\\msedge.exe\");
+                string e1 = Path.Combine(pf86, @"Microsoft\\Edge\\Application\\msedge.exe");
                 if (File.Exists(e1)) return e1;
-                string e2 = Path.Combine(pf, @\"Microsoft\\Edge\\Application\\msedge.exe\");
+                string e2 = Path.Combine(pf, @"Microsoft\\Edge\\Application\\msedge.exe");
                 if (File.Exists(e2)) return e2;
-                string c1 = Path.Combine(pf, @\"Google\\Chrome\\Application\\chrome.exe\");
+                string c1 = Path.Combine(pf, @"Google\\Chrome\\Application\\chrome.exe");
                 if (File.Exists(c1)) return c1;
-                string c2 = Path.Combine(pf86, @\"Google\\Chrome\\Application\\chrome.exe\");
+                string c2 = Path.Combine(pf86, @"Google\\Chrome\\Application\\chrome.exe");
                 if (File.Exists(c2)) return c2;
             } catch {}
-            return \"msedge.exe\";
+            return "msedge.exe";
         }
     }
+}`;
+
+  let b64EchoBlock = '';
+  try {
+    const rawB64 = btoa(unescape(encodeURIComponent(csharpSourceContent)));
+    const lines: string[] = [];
+    for (let i = 0; i < rawB64.length; i += 76) {
+      lines.push(`echo ${rawB64.slice(i, i + 76)}`);
+    }
+    b64EchoBlock = lines.join('\r\n');
+  } catch {
+    b64EchoBlock = 'echo //';
+  }
+
+  // Windows 1-Click .EXE Compiler Batch (Uses built-in csc.exe or PowerShell CodeDom)
+  const exeCompilerBatchContent = `@echo off\r
+setlocal enabledelayedexpansion\r
+title EduGuard MDM - Standalone Executable (.EXE) Creator\r
+color 0A\r
+cd /d "%~dp0"\r
+\r
+echo ====================================================================\r
+echo  EduGuard MDM - Standalone Windows 10/11 Executable (.EXE) Builder\r
+echo ====================================================================\r
+echo [*] Target Base URL: ${studentKioskUrl}\r
+echo [*] Building standalone windowless EduGuard-Student-Kiosk.exe...\r
+echo.\r
+\r
+set "OUT_EXE=%~dp0EduGuard-Student-Kiosk.exe"\r
+set "CS_FILE=%TEMP%\\EduGuardLauncher.cs"\r
+set "B64_FILE=%TEMP%\\EduGuardLauncher.b64"\r
+\r
+if exist "%CS_FILE%" del /f /q "%CS_FILE%" >nul 2>&1\r
+if exist "%B64_FILE%" del /f /q "%B64_FILE%" >nul 2>&1\r
+if exist "%OUT_EXE%" del /f /q "%OUT_EXE%" >nul 2>&1\r
+\r
+:: Step 1: Attempt to fetch pristine source directly from server if connected\r
+echo [*] Fetching source engine...\r
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^\r
+  "try { $cli = New-Object System.Net.WebClient; $cli.Headers.Add('User-Agent','EduGuard-Builder/1.4'); $cli.DownloadFile('${currentAppUrl}/api/downloads/EduGuardLauncher.cs?url=${encodeURIComponent(currentAppUrl)}', $env:CS_FILE); Write-Host '    -> Downloaded source engine successfully.' -ForegroundColor Green } catch {}"\r
+\r
+:: Step 2: Offline fallback using embedded Base64 payload\r
+if not exist "%CS_FILE%" (\r
+  echo [*] Extracting embedded offline C# engine...\r
+  (\r
+${b64EchoBlock}\r
+  ) > "%B64_FILE%"\r
+\r
+  certutil -decode -f "%B64_FILE%" "%CS_FILE%" >nul 2>&1\r
+  if not exist "%CS_FILE%" (\r
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^\r
+      "try { $b = [System.Convert]::FromBase64String((Get-Content $env:B64_FILE -Raw)); [System.IO.File]::WriteAllBytes($env:CS_FILE, $b) } catch {}"\r
+  )\r
+  if exist "%B64_FILE%" del /f /q "%B64_FILE%" >nul 2>&1\r
+)\r
+\r
+if not exist "%CS_FILE%" (\r
+  echo [!] Error: Failed to extract C# source file.\r
+  goto FALLBACK\r
+)\r
+\r
+:: Step 3: Compile via .NET Framework C# compiler (pre-installed on Windows 10/11)\r
+set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"\r
+if not exist "%CSC_PATH%" set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe"\r
+\r
+if exist "%CSC_PATH%" (\r
+  echo [*] Compiling standalone windowless executable via .NET Framework (csc.exe)...\r
+  "%CSC_PATH%" /target:winexe /platform:anycpu /optimize+ /out:"%OUT_EXE%" "%CS_FILE%"\r
+)\r
+\r
+:: Step 4: Fallback to PowerShell CodeDom Compiler if csc.exe was missing or failed\r
+if not exist "%OUT_EXE%" (\r
+  echo [*] Compiling via Windows PowerShell CodeDom Compiler...\r
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^\r
+    "$code = [System.IO.File]::ReadAllText($env:CS_FILE); $p = New-Object System.CodeDom.Compiler.CompilerParameters; $p.GenerateExecutable = $true; $p.OutputAssembly = $env:OUT_EXE; $p.CompilerOptions = '/target:winexe /optimize+ /platform:anycpu'; $p.ReferencedAssemblies.Add('System.dll'); $p.ReferencedAssemblies.Add('System.Windows.Forms.dll'); $res = (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($p, $code); if ($res.Errors.HasErrors) { foreach($e in $res.Errors){ Write-Host ('[!] ' + $e.ToString()) -ForegroundColor Red } }"\r
+)\r
+\r
+if exist "%OUT_EXE%" (\r
+  echo.\r
+  echo ====================================================================\r
+  echo  [SUCCESS] Created: "%OUT_EXE%"\r
+  echo ====================================================================\r
+  echo  EduGuard-Student-Kiosk.exe is ready!\r
+  echo  - Windowless background supervisor (no console window)\r
+  echo  - Auto-registers PC with unique machine name (WIN-%%COMPUTERNAME%%)\r
+  echo  - Live monitoring and management in Admin Console\r
+  echo  - Admin Remote Unlock: Click \\"Exit Kiosk / Unlock PC\\" in Admin Console\r
+  echo    to remotely release this PC back to Windows desktop!\r
+  echo ====================================================================\r
+  echo.\r
+  set /p \"RUN_NOW=Do you want to start EduGuard Student Kiosk right now? (Y/N) [default: Y]: \"\r
+  if /i not \"!RUN_NOW!\"==\"N\" (\r
+      echo [*] Starting EduGuard-Student-Kiosk.exe...\r
+      start \"\" \"%OUT_EXE%\"\r
+  )\r
+) else (\r
+  :FALLBACK\r
+  echo.\r
+  echo [!] Notice: Direct .EXE compilation did not finish on this system.\r
+  echo [*] Creating Silent Kiosk script launcher (works without compiler)...\r
+  copy /y \"%~dp0EduGuard-Student-Kiosk.vbs\" \"%~dp0EduGuard-Student-Kiosk.vbs\" >nul 2>&1\r
+  echo [*] You can double-click \\"EduGuard-Student-Kiosk.vbs\\" or \\"Launch-EduGuard-Watchdog.bat\\" to start!\r
+)\r
+\r
+:FINISHED\r
+if exist "%CS_FILE%" del /f /q "%CS_FILE%" >nul 2>&1\r
+if exist "%B64_FILE%" del /f /q "%B64_FILE%" >nul 2>&1\r
+echo.\r
+pause\r
+`;
+
+  // PowerShell Alternative Compiler (.ps1)
+  const exeCompilerPs1Content = `# EduGuard MDM - Standalone Windows Executable (.EXE) Compiler
+# Right-click this file and choose "Run with PowerShell" or run: powershell -ExecutionPolicy Bypass -File .\\Create-Student-Kiosk-EXE.ps1
+
+$ErrorActionPreference = 'SilentlyContinue'
+$targetUrl = '${studentKioskUrl}'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
+$outExe = Join-Path $scriptDir 'EduGuard-Student-Kiosk.exe'
+
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host " EduGuard MDM - Standalone Windows 10/11 Executable (.EXE) Builder" -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "[*] Target Base URL: $targetUrl"
+Write-Host "[*] Compiling EduGuard-Student-Kiosk.exe via .NET Framework CodeDom..."
+
+$csSource = @'
+${csharpSourceContent}
+'@
+
+$params = New-Object System.CodeDom.Compiler.CompilerParameters
+$params.GenerateExecutable = $true
+$params.OutputAssembly = $outExe
+$params.CompilerOptions = "/target:winexe /optimize+ /platform:anycpu"
+$params.ReferencedAssemblies.Add("System.dll")
+$params.ReferencedAssemblies.Add("System.Windows.Forms.dll")
+
+$provider = New-Object Microsoft.CSharp.CSharpCodeProvider
+$result = $provider.CompileAssemblyFromSource($params, $csSource)
+
+if ($result.Errors.HasErrors) {
+    Write-Host "[!] Compilation notice/errors:" -ForegroundColor Red
+    foreach ($err in $result.Errors) {
+        Write-Host "    $err" -ForegroundColor Red
+    }
 }
-'@; [System.IO.File]::WriteAllText($env:CS_FILE, $code, [System.Text.Encoding]::UTF8)"
 
-:: 1. Try standard Microsoft .NET Framework C# compiler (pre-installed on Windows 10/11)
-set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"
-if not exist "%CSC_PATH%" set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe"
-
-if exist "%CSC_PATH%" (
-  echo [*] Compiling standalone windowless executable via .NET Framework...
-  "%CSC_PATH%" /target:winexe /platform:anycpu /optimize+ /out:"%OUT_EXE%" "%CS_FILE%" >nul 2>&1
-)
-
-:: 2. Fallback: If csc.exe was missing or failed, compile via PowerShell CodeDom compiler
-if not exist "%OUT_EXE%" (
-  echo [*] Compiling via Windows PowerShell CodeDom Compiler engine...
-  powershell -NoProfile -Command ^
-    "$code = [System.IO.File]::ReadAllText($env:CS_FILE); $p = New-Object System.CodeDom.Compiler.CompilerParameters; $p.GenerateExecutable = $true; $p.OutputAssembly = $env:OUT_EXE; $p.CompilerOptions = '/target:winexe /optimize+ /platform:anycpu'; $p.ReferencedAssemblies.Add('System.dll'); (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($p, $code)" >nul 2>&1
-)
-
-if exist "%OUT_EXE%" (
-  echo.
-  echo ====================================================================
-  echo  [SUCCESS] Created: "%OUT_EXE%"
-  echo ====================================================================
-  echo  EduGuard-Student-Kiosk.exe is ready!
-  echo  - Windowless background supervisor (no console window)
-  echo  - Auto-registers PC with unique machine name (WIN-%%COMPUTERNAME%%)
-  echo  - Live monitoring and management in Admin Console
-  echo  - Admin Remote Unlock: Click "Exit Kiosk / Unlock PC" in Admin Console
-  echo    to remotely release this PC back to Windows desktop!
-  echo  - Single-instance mutex prevents duplicate processes
-  echo  - Isolated browser profile prevents reload loops and tab conflicts
-  echo ====================================================================
-  echo.
-  set /p "RUN_NOW=Do you want to start EduGuard Student Kiosk right now? (Y/N) [default: Y]: "
-  if /i not "!RUN_NOW!"=="N" (
-      echo [*] Starting EduGuard-Student-Kiosk.exe...
-      start "" "%OUT_EXE%"
-  )
-) else (
-  echo [!] Compilation notice. Creating batch launcher fallback...
-  copy /y "%~dp0Launch-EduGuard-Watchdog.bat" "%~dp0EduGuard-Student-Kiosk.bat" >nul 2>&1
-)
-
-:FINISHED
-if exist "%CS_FILE%" del /f /q "%CS_FILE%" >nul 2>&1
-echo.
-pause
+if (Test-Path $outExe) {
+    Write-Host ""
+    Write-Host "====================================================================" -ForegroundColor Green
+    Write-Host " [SUCCESS] Created: $outExe" -ForegroundColor Green
+    Write-Host "====================================================================" -ForegroundColor Green
+    Write-Host " EduGuard-Student-Kiosk.exe is ready!"
+    Write-Host " - Standalone windowless background supervisor"
+    Write-Host " - Fullscreen lockdown with remote unlock capability"
+    Write-Host ""
+    $runNow = Read-Host "Do you want to start EduGuard Student Kiosk right now? (Y/N) [default: Y]"
+    if ($runNow -ne 'N' -and $runNow -ne 'n') {
+        Start-Process $outExe
+    }
+} else {
+    Write-Host "[!] Could not create $outExe directly." -ForegroundColor Yellow
+}
 `;
 
   // Emergency Kiosk Stopper & Cleanup Script (Kills looping processes on student PC)
@@ -718,29 +813,51 @@ Start-Process -FilePath $EdgePath -ArgumentList $KioskArgs
                 </p>
               </div>
 
-              <button
-                onClick={() => downloadFile(exeCompilerBatchContent, 'Create-Student-Kiosk-EXE.bat')}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-xs cursor-pointer transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download .EXE Builder</span>
-              </button>
+              <div className="space-y-2">
+                <button
+                  onClick={() => downloadFile(exeCompilerBatchContent, 'Create-Student-Kiosk-EXE.bat')}
+                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-xs cursor-pointer transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download .EXE Builder (.BAT)</span>
+                </button>
+                <div className="flex items-center gap-1.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => downloadFile(exeCompilerPs1Content, 'Create-Student-Kiosk-EXE.ps1')}
+                    className="flex-1 py-1.5 px-2 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] font-semibold rounded-lg flex items-center justify-center space-x-1 border border-blue-200 transition-colors cursor-pointer"
+                    title="PowerShell Script Alternative"
+                  >
+                    <Download className="w-2.5 h-2.5" />
+                    <span>PowerShell (.PS1)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadFile(csharpSourceContent, 'EduGuardLauncher.cs')}
+                    className="flex-1 py-1.5 px-2 bg-gray-50 hover:bg-gray-100 text-gray-700 text-[10px] font-semibold rounded-lg flex items-center justify-center space-x-1 border border-gray-200 transition-colors cursor-pointer"
+                    title="Pure C# Source File"
+                  >
+                    <Download className="w-2.5 h-2.5" />
+                    <span>C# Source (.CS)</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Method B: Silent VBScript Launcher (No Compilation Needed) */}
-            <div className="bg-white p-5 rounded-3xl border border-gray-200 shadow-xs flex flex-col justify-between space-y-4">
+            <div className="bg-white p-5 rounded-3xl border border-amber-200/80 shadow-xs flex flex-col justify-between space-y-4">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center font-bold text-xs">
                     <Zap className="w-4 h-4" />
                   </div>
                   <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-100 uppercase">
-                    SILENT 1-CLICK
+                    NO COMPILATION
                   </span>
                 </div>
                 <h4 className="font-bold text-sm text-gray-950">Silent Kiosk Script (.VBS)</h4>
                 <p className="text-xs text-gray-500 leading-relaxed">
-                  Zero compilation needed! Runs completely windowless without any black command prompt window. Works on every Windows PC.
+                  <strong>Zero compilation required!</strong> Runs completely silent with native Windows WScript. Locks Edge into fullscreen kiosk mode immediately on double-click.
                 </p>
               </div>
 
@@ -749,7 +866,7 @@ Start-Process -FilePath $EdgePath -ArgumentList $KioskArgs
                 className="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-xs cursor-pointer transition-colors"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Download .VBS</span>
+                <span>Download Silent .VBS</span>
               </button>
             </div>
 

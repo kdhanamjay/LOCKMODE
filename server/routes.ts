@@ -1836,145 +1836,260 @@ pause\r
   res.send(content);
 });
 
+function getEduGuardCSharpCode(studentKioskUrl: string, baseUrl: string): string {
+  return `using System;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Threading;
+
+namespace EduGuardKiosk {
+    static class Program {
+        [STAThread]
+        static void Main() {
+            try {
+                ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;
+                ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
+            } catch {}
+
+            bool isNew;
+            using (Mutex mutex = new Mutex(true, "EduGuardKiosk_SingleInstance_Mutex", out isNew)) {
+                if (!isNew) return;
+
+                string machineId = "WIN-" + Environment.MachineName;
+                string url = "${studentKioskUrl}";
+                if (url.IndexOf("?") >= 0) {
+                    url += "&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName);
+                } else {
+                    url += "?student=true&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName);
+                }
+
+                string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EduGuardKiosk", "BrowserProfile");
+                try { if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir); } catch {}
+
+                string browser = FindBrowser();
+                string args = "--kiosk \\\"" + url + "\\\" --edge-kiosk-type=fullscreen --user-data-dir=\\\"" + dataDir + "\\\" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing";
+
+                while (true) {
+                    try {
+                        Process p = new Process();
+                        p.StartInfo.FileName = browser;
+                        p.StartInfo.Arguments = args;
+                        p.StartInfo.UseShellExecute = false;
+                        p.Start();
+
+                        DateTime start = DateTime.Now;
+                        p.WaitForExit();
+                        TimeSpan runtime = DateTime.Now - start;
+
+                        // Check if administrator unlocked or removed this specific PC before restarting
+                        try {
+                            using (WebClient wc = new WebClient()) {
+                                wc.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
+                                string checkUrl = "${baseUrl}/api/devices/" + Uri.EscapeDataString(machineId) + "/kiosk-status";
+                                string statusJson = wc.DownloadString(checkUrl);
+                                if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
+                                    statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0 || 
+                                    statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
+                                    return;
+                                }
+                            }
+                        } catch (WebException wex) {
+                            try {
+                                if (wex.Response is HttpWebResponse resp && (resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.Gone)) {
+                                    return;
+                                }
+                            } catch {}
+                        } catch (Exception) {}
+
+                        if (runtime.TotalSeconds < 4) {
+                            Thread.Sleep(8000);
+                        } else {
+                            Thread.Sleep(2000);
+                        }
+                    } catch (Exception) {
+                        Thread.Sleep(6000);
+                    }
+                }
+            }
+        }
+
+        static string FindBrowser() {
+            try {
+                string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+                string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                string e1 = Path.Combine(pf86, @"Microsoft\\Edge\\Application\\msedge.exe");
+                if (File.Exists(e1)) return e1;
+                string e2 = Path.Combine(pf, @"Microsoft\\Edge\\Application\\msedge.exe");
+                if (File.Exists(e2)) return e2;
+                string c1 = Path.Combine(pf, @"Google\\Chrome\\Application\\chrome.exe");
+                if (File.Exists(c1)) return c1;
+                string c2 = Path.Combine(pf86, @"Google\\Chrome\\Application\\chrome.exe");
+                if (File.Exists(c2)) return c2;
+            } catch {}
+            return "msedge.exe";
+        }
+    }
+}`;
+}
+
+apiRouter.get(['/downloads/EduGuardLauncher.cs', '/downloads/EduGuard-Student-Kiosk.cs'], (req, res) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const baseUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}`;
+  const studentKioskUrl = baseUrl.includes('?') ? `${baseUrl}&student=true` : `${baseUrl}?student=true`;
+
+  const csCode = getEduGuardCSharpCode(studentKioskUrl, baseUrl);
+  res.setHeader('Content-Disposition', 'attachment; filename="EduGuardLauncher.cs"');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(csCode);
+});
+
+apiRouter.get(['/downloads/Create-Student-Kiosk-EXE.ps1', '/downloads/Build-EduGuard-EXE.ps1'], (req, res) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const baseUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}`;
+  const studentKioskUrl = baseUrl.includes('?') ? `${baseUrl}&student=true` : `${baseUrl}?student=true`;
+  const csCode = getEduGuardCSharpCode(studentKioskUrl, baseUrl);
+
+  const ps1Content = `# EduGuard MDM - Standalone Windows Executable (.EXE) Compiler
+# Right-click this file and choose "Run with PowerShell" or run: powershell -ExecutionPolicy Bypass -File .\\Create-Student-Kiosk-EXE.ps1
+
+$ErrorActionPreference = 'SilentlyContinue'
+$targetUrl = '${studentKioskUrl}'
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $scriptDir) { $scriptDir = (Get-Location).Path }
+$outExe = Join-Path $scriptDir 'EduGuard-Student-Kiosk.exe'
+
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host " EduGuard MDM - Standalone Windows 10/11 Executable (.EXE) Builder" -ForegroundColor Cyan
+Write-Host "====================================================================" -ForegroundColor Cyan
+Write-Host "[*] Target Base URL: $targetUrl"
+Write-Host "[*] Compiling EduGuard-Student-Kiosk.exe via .NET Framework CodeDom..."
+
+$csSource = @'
+${csCode}
+'@
+
+$params = New-Object System.CodeDom.Compiler.CompilerParameters
+$params.GenerateExecutable = $true
+$params.OutputAssembly = $outExe
+$params.CompilerOptions = "/target:winexe /optimize+ /platform:anycpu"
+$params.ReferencedAssemblies.Add("System.dll")
+$params.ReferencedAssemblies.Add("System.Windows.Forms.dll")
+
+$provider = New-Object Microsoft.CSharp.CSharpCodeProvider
+$result = $provider.CompileAssemblyFromSource($params, $csSource)
+
+if ($result.Errors.HasErrors) {
+    Write-Host "[!] Compilation notice/errors:" -ForegroundColor Red
+    foreach ($err in $result.Errors) {
+        Write-Host "    $err" -ForegroundColor Red
+    }
+}
+
+if (Test-Path $outExe) {
+    Write-Host ""
+    Write-Host "====================================================================" -ForegroundColor Green
+    Write-Host " [SUCCESS] Created: $outExe" -ForegroundColor Green
+    Write-Host "====================================================================" -ForegroundColor Green
+    Write-Host " EduGuard-Student-Kiosk.exe is ready!"
+    Write-Host " - Standalone windowless background supervisor"
+    Write-Host " - Fullscreen lockdown with remote unlock capability"
+    Write-Host ""
+    $runNow = Read-Host "Do you want to start EduGuard Student Kiosk right now? (Y/N) [default: Y]"
+    if ($runNow -ne 'N' -and $runNow -ne 'n') {
+        Start-Process $outExe
+    }
+} else {
+    Write-Host "[!] Could not create $outExe directly." -ForegroundColor Yellow
+}
+`;
+  res.setHeader('Content-Disposition', 'attachment; filename="Create-Student-Kiosk-EXE.ps1"');
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.send(ps1Content);
+});
+
 apiRouter.get(['/downloads/Create-Student-Kiosk-EXE.bat', '/downloads/Build-EduGuard-EXE.bat'], (req, res) => {
   const host = req.get('host') || 'localhost:3000';
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
   const baseUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}`;
   const studentKioskUrl = baseUrl.includes('?') ? `${baseUrl}&student=true` : `${baseUrl}?student=true`;
 
+  const csCode = getEduGuardCSharpCode(studentKioskUrl, baseUrl);
+  const b64 = Buffer.from(csCode, 'utf-8').toString('base64');
+  const b64Lines: string[] = [];
+  for (let i = 0; i < b64.length; i += 76) {
+    b64Lines.push(`echo ${b64.slice(i, i + 76)}`);
+  }
+  const b64EchoBlock = b64Lines.join('\r\n');
+
   const content = `@echo off\r
 setlocal enabledelayedexpansion\r
 title EduGuard MDM - Standalone Executable (.EXE) Creator\r
 color 0A\r
+cd /d "%~dp0"\r
+\r
 echo ====================================================================\r
 echo  EduGuard MDM - Standalone Windows 10/11 Executable (.EXE) Builder\r
 echo ====================================================================\r
 echo [*] Target Base URL: ${studentKioskUrl}\r
-echo [*] Compiling EduGuard-Student-Kiosk.exe with Remote Admin Unlock...\r
+echo [*] Building standalone windowless EduGuard-Student-Kiosk.exe...\r
 echo.\r
 \r
 set "OUT_EXE=%~dp0EduGuard-Student-Kiosk.exe"\r
 set "CS_FILE=%TEMP%\\EduGuardLauncher.cs"\r
+set "B64_FILE=%TEMP%\\EduGuardLauncher.b64"\r
 \r
-:: Write C# code using PowerShell to ensure 100% clean UTF-8 escaping\r
-powershell -NoProfile -Command ^\r
-  "$code = @'\r
-using System;\r
-using System.Diagnostics;\r
-using System.IO;\r
-using System.Net;\r
-using System.Threading;\r
+if exist "%CS_FILE%" del /f /q "%CS_FILE%" >nul 2>&1\r
+if exist "%B64_FILE%" del /f /q "%B64_FILE%" >nul 2>&1\r
+if exist "%OUT_EXE%" del /f /q "%OUT_EXE%" >nul 2>&1\r
 \r
-namespace EduGuardKiosk {\r
-    static class Program {\r
-        [STAThread]\r
-        static void Main() {\r
-            try {\r
-                ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;\r
-                ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };\r
-            } catch {}\r
+:: Step 1: Attempt to fetch pristine source directly from server if connected\r
+echo [*] Fetching source engine...\r
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^\r
+  "try { $cli = New-Object System.Net.WebClient; $cli.Headers.Add('User-Agent','EduGuard-Builder/1.4'); $cli.DownloadFile('${baseUrl}/api/downloads/EduGuardLauncher.cs?url=${encodeURIComponent(baseUrl)}', $env:CS_FILE); Write-Host '    -> Downloaded source engine successfully.' -ForegroundColor Green } catch {}"\r
 \r
-            bool isNew;\r
-            using (Mutex mutex = new Mutex(true, \\"EduGuardKiosk_SingleInstance_Mutex\\", out isNew)) {\r
-                if (!isNew) return;\r
+:: Step 2: Offline fallback using embedded Base64 payload\r
+if not exist "%CS_FILE%" (\r
+  echo [*] Extracting embedded offline C# engine...\r
+  (\r
+${b64EchoBlock}\r
+  ) > "%B64_FILE%"\r
 \r
-                string machineId = \\"WIN-\\" + Environment.MachineName;\r
-                string url = \\"${studentKioskUrl}\\";\r
-                if (url.IndexOf(\\"?\\") >= 0) {\r
-                    url += \\"&device_id=\\" + Uri.EscapeDataString(machineId) + \\"&device_name=\\" + Uri.EscapeDataString(Environment.MachineName);\r
-                } else {\r
-                    url += \\"?student=true&device_id=\\" + Uri.EscapeDataString(machineId) + \\"&device_name=\\" + Uri.EscapeDataString(Environment.MachineName);\r
-                }\r
-\r
-                string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), \\"EduGuardKiosk\\", \\"BrowserProfile\\");\r
-                try { if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir); } catch {}\r
-\r
-                string browser = FindBrowser();\r
-                string args = \\"--kiosk \\\\\\"\\" + url + \\"\\\\\\" --edge-kiosk-type=fullscreen --user-data-dir=\\\\\\"\\" + dataDir + \\"\\\\\\" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\\";\r
-\r
-                while (true) {\r
-                    try {\r
-                        Process p = new Process();\r
-                        p.StartInfo.FileName = browser;\r
-                        p.StartInfo.Arguments = args;\r
-                        p.StartInfo.UseShellExecute = false;\r
-                        p.Start();\r
-\r
-                        DateTime start = DateTime.Now;\r
-                        p.WaitForExit();\r
-                        TimeSpan runtime = DateTime.Now - start;\r
-\r
-                        // Check if administrator unlocked or removed this specific PC before restarting\r
-                        try {\r
-                            using (WebClient wc = new WebClient()) {\r
-                                wc.Headers.Add(\\"User-Agent\\", \\"EduGuard-Windows-Kiosk/1.4\\");\r
-                                string checkUrl = \\"${baseUrl}/api/devices/\\" + Uri.EscapeDataString(machineId) + \\"/kiosk-status\\";\r
-                                string statusJson = wc.DownloadString(checkUrl);\r
-                                if (statusJson.IndexOf(\\"\\\\\\"isLocked\\\\\\":false\\") >= 0 || \r
-                                    statusJson.IndexOf(\\"\\\\\\"kioskActive\\\\\\":false\\") >= 0 || \r
-                                    statusJson.IndexOf(\\"\\\\\\"isDeleted\\\\\\":true\\") >= 0) {\r
-                                    return;\r
-                                }\r
-                            }\r
-                        } catch (WebException wex) {\r
-                            try {\r
-                                if (wex.Response is HttpWebResponse resp && (resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.Gone)) {\r
-                                    return;\r
-                                }\r
-                            } catch {}\r
-                        } catch (Exception) {}\r
-\r
-                        if (runtime.TotalSeconds < 4) {\r
-                            Thread.Sleep(8000);\r
-                        } else {\r
-                            Thread.Sleep(2000);\r
-                        }\r
-                    } catch (Exception) {\r
-                        Thread.Sleep(6000);\r
-                    }\r
-                }\r
-            }\r
-        }\r
-\r
-        static string FindBrowser() {\r
-            try {\r
-                string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);\r
-                string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);\r
-                string e1 = Path.Combine(pf86, @\\"Microsoft\\\\Edge\\\\Application\\\\msedge.exe\\");\r
-                if (File.Exists(e1)) return e1;\r
-                string e2 = Path.Combine(pf, @\\"Microsoft\\\\Edge\\\\Application\\\\msedge.exe\\");\r
-                if (File.Exists(e2)) return e2;\r
-                string c1 = Path.Combine(pf, @\\"Google\\\\Chrome\\\\Application\\\\chrome.exe\\");\r
-                if (File.Exists(c1)) return c1;\r
-                string c2 = Path.Combine(pf86, @\\"Google\\\\Chrome\\\\Application\\\\chrome.exe\\");\r
-                if (File.Exists(c2)) return c2;\r
-            } catch {}\r
-            return \\"msedge.exe\\";\r
-        }\r
-    }\r
-}\r
-'@; [System.IO.File]::WriteAllText($env:CS_FILE, $code, [System.Text.Encoding]::UTF8)\"\r
-\r
-:: 1. Try standard Microsoft .NET Framework C# compiler (pre-installed on Windows 10/11)\r
-set \"CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe\"\r
-if not exist \"%CSC_PATH%\" set \"CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe\"\r
-\r
-if exist \"%CSC_PATH%\" (\r
-  echo [*] Compiling standalone windowless executable via .NET Framework...\r
-  \"%CSC_PATH%\" /target:winexe /platform:anycpu /optimize+ /out:\"%OUT_EXE%\" \"%CS_FILE%\" >nul 2>&1\r
+  certutil -decode -f "%B64_FILE%" "%CS_FILE%" >nul 2>&1\r
+  if not exist "%CS_FILE%" (\r
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^\r
+      "try { $b = [System.Convert]::FromBase64String((Get-Content $env:B64_FILE -Raw)); [System.IO.File]::WriteAllBytes($env:CS_FILE, $b) } catch {}"\r
+  )\r
+  if exist "%B64_FILE%" del /f /q "%B64_FILE%" >nul 2>&1\r
 )\r
 \r
-:: 2. Fallback: If csc.exe was missing or failed, compile via PowerShell CodeDom compiler\r
-if not exist \"%OUT_EXE%\" (\r
+if not exist "%CS_FILE%" (\r
+  echo [!] Error: Failed to extract C# source file.\r
+  goto FALLBACK\r
+)\r
+\r
+:: Step 3: Compile via .NET Framework C# compiler (pre-installed on Windows 10/11)\r
+set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"\r
+if not exist "%CSC_PATH%" set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe"\r
+\r
+if exist "%CSC_PATH%" (\r
+  echo [*] Compiling standalone windowless executable via .NET Framework (csc.exe)...\r
+  "%CSC_PATH%" /target:winexe /platform:anycpu /optimize+ /out:"%OUT_EXE%" "%CS_FILE%"\r
+)\r
+\r
+:: Step 4: Fallback to PowerShell CodeDom Compiler if csc.exe was missing or failed\r
+if not exist "%OUT_EXE%" (\r
   echo [*] Compiling via Windows PowerShell CodeDom Compiler...\r
-  powershell -NoProfile -Command ^\r
-    \"$code = [System.IO.File]::ReadAllText($env:CS_FILE); $p = New-Object System.CodeDom.Compiler.CompilerParameters; $p.GenerateExecutable = $true; $p.OutputAssembly = $env:OUT_EXE; $p.CompilerOptions = '/target:winexe /optimize+ /platform:anycpu'; $p.ReferencedAssemblies.Add('System.dll'); (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($p, $code)\" >nul 2>&1\r
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^\r
+    "$code = [System.IO.File]::ReadAllText($env:CS_FILE); $p = New-Object System.CodeDom.Compiler.CompilerParameters; $p.GenerateExecutable = $true; $p.OutputAssembly = $env:OUT_EXE; $p.CompilerOptions = '/target:winexe /optimize+ /platform:anycpu'; $p.ReferencedAssemblies.Add('System.dll'); $p.ReferencedAssemblies.Add('System.Windows.Forms.dll'); $res = (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($p, $code); if ($res.Errors.HasErrors) { foreach($e in $res.Errors){ Write-Host ('[!] ' + $e.ToString()) -ForegroundColor Red } }"\r
 )\r
 \r
-if exist \"%OUT_EXE%\" (\r
+if exist "%OUT_EXE%" (\r
   echo.\r
   echo ====================================================================\r
-  echo  [SUCCESS] Created: \"%OUT_EXE%\"\r
+  echo  [SUCCESS] Created: "%OUT_EXE%"\r
   echo ====================================================================\r
   echo  EduGuard-Student-Kiosk.exe is ready!\r
   echo  - Windowless background supervisor (no console window)\r
@@ -1990,12 +2105,17 @@ if exist \"%OUT_EXE%\" (\r
       start \"\" \"%OUT_EXE%\"\r
   )\r
 ) else (\r
-  echo [!] Compilation notice. Creating fallback launcher...\r
-  copy /y \"%~dp0Launch-EduGuard-Watchdog.bat\" \"%~dp0EduGuard-Student-Kiosk.bat\" >nul 2>&1\r
+  :FALLBACK\r
+  echo.\r
+  echo [!] Notice: Direct .EXE compilation did not finish on this system.\r
+  echo [*] Creating Silent Kiosk script launcher (works without compiler)...\r
+  copy /y \"%~dp0EduGuard-Student-Kiosk.vbs\" \"%~dp0EduGuard-Student-Kiosk.vbs\" >nul 2>&1\r
+  echo [*] You can double-click \\"EduGuard-Student-Kiosk.vbs\\" or \\"Launch-EduGuard-Watchdog.bat\\" to start!\r
 )\r
 \r
 :FINISHED\r
-if exist \"%CS_FILE%\" del /f /q \"%CS_FILE%\" >nul 2>&1\r
+if exist "%CS_FILE%" del /f /q "%CS_FILE%" >nul 2>&1\r
+if exist "%B64_FILE%" del /f /q "%B64_FILE%" >nul 2>&1\r
 echo.\r
 pause\r
 `;
