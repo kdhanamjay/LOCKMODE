@@ -135,39 +135,61 @@ if not defined BROWSER_EXE set "BROWSER_EXE=msedge.exe"
 echo [*] Using Browser: !BROWSER_EXE!
 echo.
 
-:KIOSK_LOOP
+:START_KIOSK
 echo [%time%] Starting EduGuard Student Kiosk for workstation !DEV_ID!...
-"!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing
+start "" "!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing
+
+:MONITOR_LOOP
+timeout /t 2 /nobreak >nul
 
 :: Check if administrator unlocked or deleted this specific workstation from the Admin Console
 powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false) { exit 1 } else { exit 0 } } catch { exit 0 }" >nul 2>&1
-if !errorlevel! equ 2 (
+set "STATUS_CODE=!errorlevel!"
+
+if !STATUS_CODE! equ 2 (
     echo.
     echo ====================================================================
     echo  [REMOVED] Workstation was deleted from fleet inventory. Exiting.
     echo ====================================================================
+    taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1
+    taskkill /f /im msedge.exe >nul 2>&1
     exit /b 0
 )
-if !errorlevel! equ 1 (
+if !STATUS_CODE! equ 1 (
     echo.
     echo ====================================================================
-    echo  [UNLOCKED] Administrator unlocked workstation! Windows desktop free.
+    echo  [UNLOCKED] Administrator approved exit / unlocked workstation!
+    echo  [CLOSING] Terminating all kiosk windows immediately...
+    echo ====================================================================
+    taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1
+    taskkill /f /im chrome.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1
+    timeout /t 1 /nobreak >nul
+    taskkill /f /im msedge.exe >nul 2>&1
+    echo  [SUCCESS] All kiosk windows closed! Windows desktop restored.
     echo  [*] Standby monitoring: will auto-lock if Admin sends Lock command...
     echo ====================================================================
     :IDLE_MONITOR
     timeout /t 3 /nobreak >nul
-    powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $true -or $r.data.kioskActive -eq $true) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+    powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $true -and $r.data.kioskActive -eq $true) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
     if !errorlevel! equ 2 exit /b 0
     if !errorlevel! equ 0 (
         echo [%time%] Administrator dispatched Lock command! Relaunching Kiosk immediately...
-        goto KIOSK_LOOP
+        goto START_KIOSK
     )
     goto IDLE_MONITOR
 )
 
-echo [%time%] Kiosk window closed. Re-launching in 3 seconds (locked by exam policy)...
-timeout /t 3 /nobreak >nul
-goto KIOSK_LOOP
+:: If still locked, ensure browser is still running (anti-tamper / crash recovery)
+tasklist /fi "IMAGENAME eq msedge.exe" 2>nul | findstr /i "msedge.exe" >nul
+if !errorlevel! neq 0 (
+    tasklist /fi "IMAGENAME eq chrome.exe" 2>nul | findstr /i "chrome.exe" >nul
+    if !errorlevel! neq 0 (
+        echo [%time%] Kiosk window closed while exam is active! Re-launching immediately...
+        goto START_KIOSK
+    )
+)
+
+goto MONITOR_LOOP
 `;
 
   // C# Source Code for EduGuard Standalone Kiosk
@@ -502,31 +524,65 @@ machineId = "WIN-" & WshNetwork.ComputerName
 kioskUrl = "${studentKioskUrl}&device_id=" & machineId & "&device_name=" & WshNetwork.ComputerName
 kioskArgs = " --kiosk """ & kioskUrl & """ --edge-kiosk-type=fullscreen --user-data-dir=""" & dataDir & """ --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing"
 
-Do
-    startTime = Timer()
-    WshShell.Run browserExe & kioskArgs, 3, True
-    elapsed = Timer() - startTime
+' Launch kiosk initially (False = non-blocking so VBScript actively monitors in background)
+WshShell.Run browserExe & kioskArgs, 1, False
 
-    ' Check if administrator unlocked this PC remotely
+Do While True
+    WScript.Sleep 2000
+
+    ' 1. Check if Administrator unlocked or removed workstation
     On Error Resume Next
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
     http.Open "GET", "${currentAppUrl}/api/devices/" & machineId & "/kiosk-status", False
     http.Send
     If http.Status = 200 Then
-        If InStr(http.responseText, """isLocked"":false") > 0 Or InStr(http.responseText, """kioskActive"":false") > 0 Or InStr(http.responseText, """isDeleted"":true") > 0 Then
-            ' Admin unlocked or deleted this workstation! Clean exit!
+        Dim resp
+        resp = http.responseText
+        If InStr(resp, """isDeleted"":true") > 0 Then
+            ' Workstation deleted by admin: terminate kiosk browser and quit
+            WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
+            WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
+            WScript.Sleep 500
+            WshShell.Run "taskkill /f /im msedge.exe", 0, True
             WScript.Quit 0
         End If
+        If InStr(resp, """isLocked"":false") > 0 Or InStr(resp, """kioskActive"":false") > 0 Then
+            ' WORKSTATION UNLOCKED / APPROVED BY ADMINISTRATOR!
+            ' Terminate all kiosk windows immediately to restore clean Windows Desktop!
+            WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
+            WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
+            WScript.Sleep 500
+            WshShell.Run "taskkill /f /im msedge.exe", 0, True
+            
+            ' Silent idle standby: if Admin ever sends "Lock Device" from Admin Console, auto-lock PC again!
+            Do While True
+                WScript.Sleep 3000
+                Set httpIdle = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+                httpIdle.Open "GET", "${currentAppUrl}/api/devices/" & machineId & "/kiosk-status", False
+                httpIdle.Send
+                If httpIdle.Status = 200 Then
+                    Dim idleResp
+                    idleResp = httpIdle.responseText
+                    If InStr(idleResp, """isDeleted"":true") > 0 Then WScript.Quit 0
+                    If InStr(idleResp, """isLocked"":true") > 0 And InStr(idleResp, """kioskActive"":true") > 0 Then
+                        ' Admin dispatched Remote Lock! Relaunch kiosk immediately!
+                        Exit Do
+                    End If
+                End If
+            Loop
+            ' Re-launch kiosk after admin locked
+            WshShell.Run browserExe & kioskArgs, 1, False
+        End If
     ElseIf http.Status = 404 Then
-        ' Admin deleted this workstation! Clean exit!
+        WshShell.Run "taskkill /f /im msedge.exe", 0, True
         WScript.Quit 0
     End If
     On Error Goto 0
 
-    If elapsed < 4 Then
-        WScript.Sleep 8000
-    Else
-        WScript.Sleep 2000
+    ' 2. Anti-tamper watchdog: If browser closed or crashed while workstation is STILL LOCKED, relaunch it!
+    Set edgeProcs = GetObject("winmgmts:").ExecQuery("Select ProcessId from Win32_Process Where Name = 'msedge.exe' or Name = 'chrome.exe'")
+    If edgeProcs.Count = 0 Then
+        WshShell.Run browserExe & kioskArgs, 1, False
     End If
 Loop
 `;

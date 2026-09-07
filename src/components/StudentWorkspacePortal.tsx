@@ -606,13 +606,22 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     setCurrentDevice((prev) => ({ ...prev, isLocked: false, status: 'ONLINE', lockReason: undefined }));
     playUnlockSuccessSound();
 
-    // Auto-attempt window.close after 2.5s
+    // Auto-attempt window.close after 2s
     setTimeout(() => {
+      try {
+        window.open('', '_self', '');
+        window.close();
+      } catch (e) {}
       try {
         window.close();
       } catch (e) {}
-      if (onExitRef.current) onExitRef.current();
-    }, 2500);
+
+      // Only invoke onExit if running in the Admin Console Simulator (not a real student machine)
+      const isStudentStation = window.location.search.includes('student') || window.location.search.includes('kiosk');
+      if (!isStudentStation && onExitRef.current) {
+        onExitRef.current();
+      }
+    }, 2000);
   };
 
   // Auto-Register PC with Admin Console on start (Runs ONCE on mount)
@@ -2558,17 +2567,24 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
               <button
                 onClick={() => {
                   try {
+                    window.open('', '_self', '');
                     window.close();
                   } catch (e) {}
-                  if (onExit) onExit();
+                  try {
+                    window.close();
+                  } catch (e) {}
+                  const isStudentStation = window.location.search.includes('student') || window.location.search.includes('kiosk');
+                  if (!isStudentStation && onExit) {
+                    onExit();
+                  }
                 }}
                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-lg shadow-emerald-600/20 text-sm flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Exit Kiosk & Return to Desktop</span>
+                <span>Close Kiosk Window (Alt+F4)</span>
               </button>
               <p className="text-[11px] text-gray-400">
-                Closing in a few moments automatically...
+                You can also close this window with <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono text-[10px] text-gray-700">Alt + F4</kbd> or switch to desktop using Windows Key.
               </p>
             </div>
           </div>

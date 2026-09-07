@@ -1888,8 +1888,29 @@ namespace EduGuardKiosk {
                         p.Start();
 
                         DateTime start = DateTime.Now;
-                        p.WaitForExit();
-                        TimeSpan runtime = DateTime.Now - start;
+
+                        // Actively monitor admin status while browser is running
+                        while (!p.HasExited) {
+                            Thread.Sleep(2000);
+                            try {
+                                using (WebClient wc = new WebClient()) {
+                                    wc.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
+                                    string checkUrl = "${baseUrl}/api/devices/" + Uri.EscapeDataString(machineId) + "/kiosk-status";
+                                    string statusJson = wc.DownloadString(checkUrl);
+                                    if (statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
+                                        try { p.Kill(); } catch {}
+                                        return;
+                                    }
+                                    if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
+                                        statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0) {
+                                        // Workstation was unlocked / exit approved by Administrator!
+                                        // Terminate kiosk browser immediately to restore clean Windows desktop!
+                                        try { p.Kill(); } catch {}
+                                        break;
+                                    }
+                                }
+                            } catch {}
+                        }
 
                         // Check if administrator unlocked or removed this specific PC before restarting
                         try {
@@ -2192,28 +2213,65 @@ End If\r
 \r
 kioskArgs = " --kiosk """ & targetUrl & """ --edge-kiosk-type=fullscreen --user-data-dir=""" & dataDir & """ --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing"\r
 \r
-Do While True\r
-    startTime = Timer\r
-    WshShell.Run """" & browserExe & """" & kioskArgs, 1, True\r
-    elapsed = Timer - startTime\r
+' Launch kiosk initially (False = non-blocking so VBScript actively monitors in background)\r
+WshShell.Run """" & browserExe & """" & kioskArgs, 1, False\r
 \r
+Do While True\r
+    WScript.Sleep 2000\r
+\r
+    ' 1. Check if Administrator unlocked or removed workstation\r
     On Error Resume Next\r
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")\r
     http.Open "GET", "${baseUrl}/api/devices/" & machineId & "/kiosk-status", False\r
     http.Send\r
     If http.Status = 200 Then\r
-        If InStr(http.responseText, """isLocked"":false") > 0 Or InStr(http.responseText, """kioskActive"":false") > 0 Or InStr(http.responseText, """isDeleted"":true") > 0 Then\r
+        Dim resp\r
+        resp = http.responseText\r
+        If InStr(resp, """isDeleted"":true") > 0 Then\r
+            ' Workstation deleted by admin: terminate kiosk browser and quit\r
+            WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
+            WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
+            WScript.Sleep 500\r
+            WshShell.Run "taskkill /f /im msedge.exe", 0, True\r
             WScript.Quit 0\r
         End If\r
+        If InStr(resp, """isLocked"":false") > 0 Or InStr(resp, """kioskActive"":false") > 0 Then\r
+            ' WORKSTATION UNLOCKED / APPROVED BY ADMINISTRATOR!\r
+            ' Terminate all kiosk windows immediately to restore clean Windows Desktop!\r
+            WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
+            WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
+            WScript.Sleep 500\r
+            WshShell.Run "taskkill /f /im msedge.exe", 0, True\r
+            \r
+            ' Silent idle standby: if Admin ever sends "Lock Device" from Admin Console, auto-lock PC again!\r
+            Do While True\r
+                WScript.Sleep 3000\r
+                Set httpIdle = CreateObject("MSXML2.ServerXMLHTTP.6.0")\r
+                httpIdle.Open "GET", "${baseUrl}/api/devices/" & machineId & "/kiosk-status", False\r
+                httpIdle.Send\r
+                If httpIdle.Status = 200 Then\r
+                    Dim idleResp\r
+                    idleResp = httpIdle.responseText\r
+                    If InStr(idleResp, """isDeleted"":true") > 0 Then WScript.Quit 0\r
+                    If InStr(idleResp, """isLocked"":true") > 0 And InStr(idleResp, """kioskActive"":true") > 0 Then\r
+                        ' Admin dispatched Remote Lock! Relaunch kiosk immediately!\r
+                        Exit Do\r
+                    End If\r
+                End If\r
+            Loop\r
+            ' Re-launch kiosk after admin locked\r
+            WshShell.Run """" & browserExe & """" & kioskArgs, 1, False\r
+        End If\r
     ElseIf http.Status = 404 Then\r
+        WshShell.Run "taskkill /f /im msedge.exe", 0, True\r
         WScript.Quit 0\r
     End If\r
     On Error Goto 0\r
 \r
-    If elapsed < 4 Then\r
-        WScript.Sleep 8000\r
-    Else\r
-        WScript.Sleep 2000\r
+    ' 2. Anti-tamper watchdog: If browser closed or crashed while workstation is STILL LOCKED, relaunch it!\r
+    Set edgeProcs = GetObject("winmgmts:").ExecQuery("Select ProcessId from Win32_Process Where Name = 'msedge.exe' or Name = 'chrome.exe'")\r
+    If edgeProcs.Count = 0 Then\r
+        WshShell.Run """" & browserExe & """" & kioskArgs, 1, False\r
     End If\r
 Loop\r
 `;
@@ -2257,39 +2315,61 @@ if not defined BROWSER_EXE set "BROWSER_EXE=msedge.exe"\r
 echo [*] Using Browser: !BROWSER_EXE!\r
 echo.\r
 \r
-:KIOSK_LOOP\r
+:START_KIOSK\r
 echo [%time%] Starting EduGuard Student Kiosk for workstation !DEV_ID!...\r
-"!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
+start "" "!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
+\r
+:MONITOR_LOOP\r
+timeout /t 2 /nobreak >nul\r
 \r
 :: Check if administrator unlocked or deleted this specific workstation from the Admin Console\r
 powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false) { exit 1 } else { exit 0 } } catch { exit 0 }" >nul 2>&1\r
-if !errorlevel! equ 2 (\r
+set "STATUS_CODE=!errorlevel!"\r
+\r
+if !STATUS_CODE! equ 2 (\r
     echo.\r
     echo ====================================================================\r
     echo  [REMOVED] Workstation was deleted from fleet inventory. Exiting.\r
     echo ====================================================================\r
+    taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
+    taskkill /f /im msedge.exe >nul 2>&1\r
     exit /b 0\r
 )\r
-if !errorlevel! equ 1 (\r
+if !STATUS_CODE! equ 1 (\r
     echo.\r
     echo ====================================================================\r
-    echo  [UNLOCKED] Administrator unlocked workstation! Windows desktop free.\r
+    echo  [UNLOCKED] Administrator approved exit / unlocked workstation!\r
+    echo  [CLOSING] Terminating all kiosk windows immediately...\r
+    echo ====================================================================\r
+    taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
+    taskkill /f /im chrome.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
+    timeout /t 1 /nobreak >nul\r
+    taskkill /f /im msedge.exe >nul 2>&1\r
+    echo  [SUCCESS] All kiosk windows closed! Windows desktop restored.\r
     echo  [*] Standby monitoring: will auto-lock if Admin sends Lock command...\r
     echo ====================================================================\r
     :IDLE_MONITOR\r
     timeout /t 3 /nobreak >nul\r
-    powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $true -or $r.data.kioskActive -eq $true) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1\r
+    powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $true -and $r.data.kioskActive -eq $true) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1\r
     if !errorlevel! equ 2 exit /b 0\r
     if !errorlevel! equ 0 (\r
         echo [%time%] Administrator dispatched Lock command! Relaunching Kiosk immediately...\r
-        goto KIOSK_LOOP\r
+        goto START_KIOSK\r
     )\r
     goto IDLE_MONITOR\r
 )\r
 \r
-echo [%time%] Kiosk window closed. Re-launching in 2 seconds...\r
-timeout /t 2 /nobreak >nul\r
-goto KIOSK_LOOP\r
+:: If still locked, ensure browser is still running (anti-tamper / crash recovery)\r
+tasklist /fi "IMAGENAME eq msedge.exe" 2>nul | findstr /i "msedge.exe" >nul\r
+if !errorlevel! neq 0 (\r
+    tasklist /fi "IMAGENAME eq chrome.exe" 2>nul | findstr /i "chrome.exe" >nul\r
+    if !errorlevel! neq 0 (\r
+        echo [%time%] Kiosk window closed while exam is active! Re-launching immediately...\r
+        goto START_KIOSK\r
+    )\r
+)\r
+\r
+goto MONITOR_LOOP\r
 `;
   res.setHeader('Content-Disposition', 'attachment; filename="Launch-EduGuard-Watchdog.bat"');
   res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');

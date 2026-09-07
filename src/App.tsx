@@ -1,7 +1,7 @@
 // EduGuard MDM — Enterprise Android Device Management Web Console
 // Complete Real-Time Reactive Architecture
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { api, subscribeToMdmEvents } from './lib/api';
 import {
   DashboardStats,
@@ -43,6 +43,7 @@ import { SettingsView } from './components/SettingsView';
 import { StudentDeviceSimulator } from './components/StudentDeviceSimulator';
 import { StudentWorkspacePortal } from './components/StudentWorkspacePortal';
 import { AdminLoginView } from './components/AdminLoginView';
+import { WorkstationUnlockedView } from './components/WorkstationUnlockedView';
 import { KioskExitApprovalModal } from './components/KioskExitApprovalModal';
 import { KioskExitRequest } from './types/mdm';
 import { ShieldCheck, AlertTriangle, CheckCircle2, RefreshCw } from 'lucide-react';
@@ -522,6 +523,11 @@ export function App() {
     setIsStudentWorkspaceOpen(false);
   }, []);
 
+  // Check if this browser was opened explicitly as a dedicated student kiosk (e.g. from .vbs, .bat, or URL)
+  const isDedicatedStudentStation = useMemo(() => {
+    return window.location.search.includes('student') || window.location.search.includes('kiosk');
+  }, []);
+
   if (isStudentWorkspaceOpen) {
     return (
       <StudentWorkspacePortal
@@ -530,6 +536,19 @@ export function App() {
         applications={applications}
         studyMaterials={studyMaterials}
         onExit={handleExitStudentWorkspace}
+      />
+    );
+  }
+
+  // If this window was launched as a student workstation, NEVER fall through to AdminLoginView or Admin Console!
+  // Instead, render the permanent WorkstationUnlockedView so the student can close the window safely.
+  if (isDedicatedStudentStation) {
+    return (
+      <WorkstationUnlockedView
+        deviceId={simulatorDevice?.deviceId}
+        studentName={simulatorDevice?.assignedStudentName}
+        studentRoll={simulatorDevice?.assignedStudentRoll}
+        onReopenKiosk={() => setIsStudentWorkspaceOpen(true)}
       />
     );
   }
