@@ -557,8 +557,8 @@ apiRouter.post('/devices/checkin', (req: AuthenticatedRequest, res: Response) =>
     osVersion: osVersion || (detectedPlatform === 'WINDOWS_PC' ? 'Windows 11 Pro' : 'Android 15'),
     agentVersion: '2.4.0',
     managementMode: 'DEVICE_OWNER',
-    status: isLocked ? 'LOCKED' : 'ONLINE',
-    isLocked: isLocked !== undefined ? isLocked : false,
+    status: (isLocked !== undefined ? isLocked : (detectedPlatform === 'WINDOWS_PC')) ? 'LOCKED' : 'ONLINE',
+    isLocked: isLocked !== undefined ? isLocked : (detectedPlatform === 'WINDOWS_PC' ? true : false),
     schoolId: targetSchool.id,
     schoolName: targetSchool.name,
     classId: targetClass.id,
@@ -673,10 +673,10 @@ apiRouter.get('/devices/:id/kiosk-status', (req: AuthenticatedRequest, res: Resp
       success: true,
       data: {
         deviceId: req.params.id,
-        isLocked: false,
-        kioskActive: false,
+        isLocked: wasDeleted ? false : true,
+        kioskActive: wasDeleted ? false : true,
         isDeleted: wasDeleted,
-        status: 'UNENROLLED',
+        status: wasDeleted ? 'UNENROLLED' : 'PENDING_REGISTRATION',
       },
     });
   }
@@ -1808,6 +1808,8 @@ apiRouter.post('/kiosk-exit-requests/:id/reject', (req: AuthenticatedRequest, re
 // -------------------------------------------------------------
 // 19. WINDOWS KIOSK DOWNLOADS & INSTALLERS
 // -------------------------------------------------------------
+// 7. WINDOWS KIOSK DOWNLOADS & EXECUTABLE BUILDERS
+// -------------------------------------------------------------
 apiRouter.get('/downloads/Stop-EduGuard-Kiosk.bat', (req, res) => {
   const content = `@echo off\r
 title EduGuard MDM - Emergency Kiosk Stopper\r
@@ -1818,7 +1820,9 @@ echo ====================================================================\r
 echo [*] Terminating EduGuard-Student-Kiosk watchdog processes...\r
 taskkill /f /im EduGuard-Student-Kiosk.exe >nul 2>&1\r
 taskkill /f /im EduGuard-Student-Kiosk.bat >nul 2>&1\r
+taskkill /f /im Create-Student-Kiosk-EXE.bat >nul 2>&1\r
 taskkill /f /im Launch-EduGuard-Watchdog.bat >nul 2>&1\r
+taskkill /f /im wscript.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
 taskkill /f /im cmd.exe /fi "WINDOWTITLE eq EduGuard MDM*" >nul 2>&1\r
 echo [*] Terminating Kiosk Edge browser instances...\r
 taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
@@ -1832,10 +1836,250 @@ pause\r
   res.send(content);
 });
 
+apiRouter.get(['/downloads/Create-Student-Kiosk-EXE.bat', '/downloads/Build-EduGuard-EXE.bat'], (req, res) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const baseUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}`;
+  const studentKioskUrl = baseUrl.includes('?') ? `${baseUrl}&student=true` : `${baseUrl}?student=true`;
+
+  const content = `@echo off\r
+setlocal enabledelayedexpansion\r
+title EduGuard MDM - Standalone Executable (.EXE) Creator\r
+color 0A\r
+echo ====================================================================\r
+echo  EduGuard MDM - Standalone Windows 10/11 Executable (.EXE) Builder\r
+echo ====================================================================\r
+echo [*] Target Base URL: ${studentKioskUrl}\r
+echo [*] Compiling EduGuard-Student-Kiosk.exe with Remote Admin Unlock...\r
+echo.\r
+\r
+set "OUT_EXE=%~dp0EduGuard-Student-Kiosk.exe"\r
+set "CS_FILE=%TEMP%\\EduGuardLauncher.cs"\r
+\r
+:: Write C# code using PowerShell to ensure 100% clean UTF-8 escaping\r
+powershell -NoProfile -Command ^\r
+  "$code = @'\r
+using System;\r
+using System.Diagnostics;\r
+using System.IO;\r
+using System.Net;\r
+using System.Threading;\r
+\r
+namespace EduGuardKiosk {\r
+    static class Program {\r
+        [STAThread]\r
+        static void Main() {\r
+            try {\r
+                ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;\r
+                ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };\r
+            } catch {}\r
+\r
+            bool isNew;\r
+            using (Mutex mutex = new Mutex(true, \\"EduGuardKiosk_SingleInstance_Mutex\\", out isNew)) {\r
+                if (!isNew) return;\r
+\r
+                string machineId = \\"WIN-\\" + Environment.MachineName;\r
+                string url = \\"${studentKioskUrl}\\";\r
+                if (url.IndexOf(\\"?\\") >= 0) {\r
+                    url += \\"&device_id=\\" + Uri.EscapeDataString(machineId) + \\"&device_name=\\" + Uri.EscapeDataString(Environment.MachineName);\r
+                } else {\r
+                    url += \\"?student=true&device_id=\\" + Uri.EscapeDataString(machineId) + \\"&device_name=\\" + Uri.EscapeDataString(Environment.MachineName);\r
+                }\r
+\r
+                string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), \\"EduGuardKiosk\\", \\"BrowserProfile\\");\r
+                try { if (!Directory.Exists(dataDir)) Directory.CreateDirectory(dataDir); } catch {}\r
+\r
+                string browser = FindBrowser();\r
+                string args = \\"--kiosk \\\\\\"\\" + url + \\"\\\\\\" --edge-kiosk-type=fullscreen --user-data-dir=\\\\\\"\\" + dataDir + \\"\\\\\\" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\\";\r
+\r
+                while (true) {\r
+                    try {\r
+                        Process p = new Process();\r
+                        p.StartInfo.FileName = browser;\r
+                        p.StartInfo.Arguments = args;\r
+                        p.StartInfo.UseShellExecute = false;\r
+                        p.Start();\r
+\r
+                        DateTime start = DateTime.Now;\r
+                        p.WaitForExit();\r
+                        TimeSpan runtime = DateTime.Now - start;\r
+\r
+                        // Check if administrator unlocked or removed this specific PC before restarting\r
+                        try {\r
+                            using (WebClient wc = new WebClient()) {\r
+                                wc.Headers.Add(\\"User-Agent\\", \\"EduGuard-Windows-Kiosk/1.4\\");\r
+                                string checkUrl = \\"${baseUrl}/api/devices/\\" + Uri.EscapeDataString(machineId) + \\"/kiosk-status\\";\r
+                                string statusJson = wc.DownloadString(checkUrl);\r
+                                if (statusJson.IndexOf(\\"\\\\\\"isLocked\\\\\\":false\\") >= 0 || \r
+                                    statusJson.IndexOf(\\"\\\\\\"kioskActive\\\\\\":false\\") >= 0 || \r
+                                    statusJson.IndexOf(\\"\\\\\\"isDeleted\\\\\\":true\\") >= 0) {\r
+                                    return;\r
+                                }\r
+                            }\r
+                        } catch (WebException wex) {\r
+                            try {\r
+                                if (wex.Response is HttpWebResponse resp && (resp.StatusCode == HttpStatusCode.NotFound || resp.StatusCode == HttpStatusCode.Gone)) {\r
+                                    return;\r
+                                }\r
+                            } catch {}\r
+                        } catch (Exception) {}\r
+\r
+                        if (runtime.TotalSeconds < 4) {\r
+                            Thread.Sleep(8000);\r
+                        } else {\r
+                            Thread.Sleep(2000);\r
+                        }\r
+                    } catch (Exception) {\r
+                        Thread.Sleep(6000);\r
+                    }\r
+                }\r
+            }\r
+        }\r
+\r
+        static string FindBrowser() {\r
+            try {\r
+                string pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);\r
+                string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);\r
+                string e1 = Path.Combine(pf86, @\\"Microsoft\\\\Edge\\\\Application\\\\msedge.exe\\");\r
+                if (File.Exists(e1)) return e1;\r
+                string e2 = Path.Combine(pf, @\\"Microsoft\\\\Edge\\\\Application\\\\msedge.exe\\");\r
+                if (File.Exists(e2)) return e2;\r
+                string c1 = Path.Combine(pf, @\\"Google\\\\Chrome\\\\Application\\\\chrome.exe\\");\r
+                if (File.Exists(c1)) return c1;\r
+                string c2 = Path.Combine(pf86, @\\"Google\\\\Chrome\\\\Application\\\\chrome.exe\\");\r
+                if (File.Exists(c2)) return c2;\r
+            } catch {}\r
+            return \\"msedge.exe\\";\r
+        }\r
+    }\r
+}\r
+'@; [System.IO.File]::WriteAllText($env:CS_FILE, $code, [System.Text.Encoding]::UTF8)\"\r
+\r
+:: 1. Try standard Microsoft .NET Framework C# compiler (pre-installed on Windows 10/11)\r
+set \"CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe\"\r
+if not exist \"%CSC_PATH%\" set \"CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe\"\r
+\r
+if exist \"%CSC_PATH%\" (\r
+  echo [*] Compiling standalone windowless executable via .NET Framework...\r
+  \"%CSC_PATH%\" /target:winexe /platform:anycpu /optimize+ /out:\"%OUT_EXE%\" \"%CS_FILE%\" >nul 2>&1\r
+)\r
+\r
+:: 2. Fallback: If csc.exe was missing or failed, compile via PowerShell CodeDom compiler\r
+if not exist \"%OUT_EXE%\" (\r
+  echo [*] Compiling via Windows PowerShell CodeDom Compiler...\r
+  powershell -NoProfile -Command ^\r
+    \"$code = [System.IO.File]::ReadAllText($env:CS_FILE); $p = New-Object System.CodeDom.Compiler.CompilerParameters; $p.GenerateExecutable = $true; $p.OutputAssembly = $env:OUT_EXE; $p.CompilerOptions = '/target:winexe /optimize+ /platform:anycpu'; $p.ReferencedAssemblies.Add('System.dll'); (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($p, $code)\" >nul 2>&1\r
+)\r
+\r
+if exist \"%OUT_EXE%\" (\r
+  echo.\r
+  echo ====================================================================\r
+  echo  [SUCCESS] Created: \"%OUT_EXE%\"\r
+  echo ====================================================================\r
+  echo  EduGuard-Student-Kiosk.exe is ready!\r
+  echo  - Windowless background supervisor (no console window)\r
+  echo  - Auto-registers PC with unique machine name (WIN-%%COMPUTERNAME%%)\r
+  echo  - Live monitoring and management in Admin Console\r
+  echo  - Admin Remote Unlock: Click \\"Exit Kiosk / Unlock PC\\" in Admin Console\r
+  echo    to remotely release this PC back to Windows desktop!\r
+  echo ====================================================================\r
+  echo.\r
+  set /p \"RUN_NOW=Do you want to start EduGuard Student Kiosk right now? (Y/N) [default: Y]: \"\r
+  if /i not \"!RUN_NOW!\"==\"N\" (\r
+      echo [*] Starting EduGuard-Student-Kiosk.exe...\r
+      start \"\" \"%OUT_EXE%\"\r
+  )\r
+) else (\r
+  echo [!] Compilation notice. Creating fallback launcher...\r
+  copy /y \"%~dp0Launch-EduGuard-Watchdog.bat\" \"%~dp0EduGuard-Student-Kiosk.bat\" >nul 2>&1\r
+)\r
+\r
+:FINISHED\r
+if exist \"%CS_FILE%\" del /f /q \"%CS_FILE%\" >nul 2>&1\r
+echo.\r
+pause\r
+`;
+  res.setHeader('Content-Disposition', 'attachment; filename="Create-Student-Kiosk-EXE.bat"');
+  res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
+  res.send(content);
+});
+
+apiRouter.get('/downloads/EduGuard-Student-Kiosk.vbs', (req, res) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const baseUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}`;
+  const studentKioskUrl = baseUrl.includes('?') ? `${baseUrl}&student=true` : `${baseUrl}?student=true`;
+
+  const content = `' EduGuard MDM - Silent Windowless Student Kiosk Launcher (.VBS)\r
+' Zero command window flashing, native WScript execution\r
+\r
+On Error Resume Next\r
+Set WshShell = CreateObject("WScript.Shell")\r
+Set fso = CreateObject("Scripting.FileSystemObject")\r
+\r
+machineName = WshShell.ExpandEnvironmentStrings("%COMPUTERNAME%")\r
+machineId = "WIN-" & machineName\r
+appData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")\r
+dataDir = appData & "\\EduGuardKiosk\\BrowserProfile"\r
+\r
+If Not fso.FolderExists(dataDir) Then\r
+    fso.CreateFolder(appData & "\\EduGuardKiosk")\r
+    fso.CreateFolder(dataDir)\r
+End If\r
+\r
+targetUrl = "${studentKioskUrl}&device_id=" & machineId & "&device_name=" & machineName\r
+\r
+browserExe = ""\r
+pf86 = WshShell.ExpandEnvironmentStrings("%ProgramFiles(x86)%")\r
+pf = WshShell.ExpandEnvironmentStrings("%ProgramFiles%")\r
+\r
+If fso.FileExists(pf86 & "\\Microsoft\\Edge\\Application\\msedge.exe") Then\r
+    browserExe = pf86 & "\\Microsoft\\Edge\\Application\\msedge.exe"\r
+ElseIf fso.FileExists(pf & "\\Microsoft\\Edge\\Application\\msedge.exe") Then\r
+    browserExe = pf & "\\Microsoft\\Edge\\Application\\msedge.exe"\r
+ElseIf fso.FileExists(pf & "\\Google\\Chrome\\Application\\chrome.exe") Then\r
+    browserExe = pf & "\\Google\\Chrome\\Application\\chrome.exe"\r
+Else\r
+    browserExe = "msedge.exe"\r
+End If\r
+\r
+kioskArgs = " --kiosk """ & targetUrl & """ --edge-kiosk-type=fullscreen --user-data-dir=""" & dataDir & """ --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing"\r
+\r
+Do While True\r
+    startTime = Timer\r
+    WshShell.Run """" & browserExe & """" & kioskArgs, 1, True\r
+    elapsed = Timer - startTime\r
+\r
+    On Error Resume Next\r
+    Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")\r
+    http.Open "GET", "${baseUrl}/api/devices/" & machineId & "/kiosk-status", False\r
+    http.Send\r
+    If http.Status = 200 Then\r
+        If InStr(http.responseText, """isLocked"":false") > 0 Or InStr(http.responseText, """kioskActive"":false") > 0 Or InStr(http.responseText, """isDeleted"":true") > 0 Then\r
+            WScript.Quit 0\r
+        End If\r
+    ElseIf http.Status = 404 Then\r
+        WScript.Quit 0\r
+    End If\r
+    On Error Goto 0\r
+\r
+    If elapsed < 4 Then\r
+        WScript.Sleep 8000\r
+    Else\r
+        WScript.Sleep 2000\r
+    End If\r
+Loop\r
+`;
+  res.setHeader('Content-Disposition', 'attachment; filename="EduGuard-Student-Kiosk.vbs"');
+  res.setHeader('Content-Type', 'application/x-vbs; charset=utf-8');
+  res.send(content);
+});
+
 apiRouter.get('/downloads/Launch-EduGuard-Watchdog.bat', (req, res) => {
   const host = req.get('host') || 'localhost:3000';
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-  const targetUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}?student=true`;
+  const baseUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}`;
+  const studentKioskUrl = baseUrl.includes('?') ? `${baseUrl}&student=true` : `${baseUrl}?student=true`;
 
   const content = `@echo off\r
 setlocal enabledelayedexpansion\r
@@ -1844,7 +2088,11 @@ color 0B\r
 echo ====================================================================\r
 echo  EduGuard MDM - Windows 10/11 Secure Student Kiosk Active\r
 echo ====================================================================\r
-echo [*] Kiosk Target: ${targetUrl}\r
+set "DEV_ID=WIN-%COMPUTERNAME%"\r
+set "DEV_NAME=%COMPUTERNAME%"\r
+set "TARGET_URL=${studentKioskUrl}&device_id=!DEV_ID!&device_name=!DEV_NAME!"\r
+echo [*] Workstation ID: !DEV_ID!\r
+echo [*] Kiosk Target: !TARGET_URL!\r
 echo [*] Watchdog: Active (Ensures kiosk remains full-screen)\r
 echo [*] Single-Instance & Rapid Reload Protection: Enabled\r
 echo ====================================================================\r
@@ -1863,11 +2111,22 @@ echo [*] Using Browser: !BROWSER_EXE!\r
 echo.\r
 \r
 :KIOSK_LOOP\r
-echo [%time%] Starting EduGuard Student Kiosk...\r
-"!BROWSER_EXE!" --kiosk "${targetUrl}" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
+echo [%time%] Starting EduGuard Student Kiosk for workstation !DEV_ID!...\r
+"!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
 \r
-echo [%time%] Kiosk window closed. Re-launching in 3 seconds...\r
-timeout /t 3 /nobreak >nul\r
+:: Check if administrator unlocked or deleted this specific workstation from the Admin Console\r
+powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false -or $r.data.isDeleted -eq $true) { exit 0 } else { exit 1 } } catch { exit 0 }" >nul 2>&1\r
+if !errorlevel! equ 0 (\r
+    echo.\r
+    echo ====================================================================\r
+    echo  [UNLOCKED/REMOVED] Administrator unlocked or removed workstation!\r
+    echo  [SUCCESS] Exiting EduGuard Kiosk Watchdog. Windows Desktop restored.\r
+    echo ====================================================================\r
+    exit /b 0\r
+)\r
+\r
+echo [%time%] Kiosk window closed. Re-launching in 2 seconds...\r
+timeout /t 2 /nobreak >nul\r
 goto KIOSK_LOOP\r
 `;
   res.setHeader('Content-Disposition', 'attachment; filename="Launch-EduGuard-Watchdog.bat"');

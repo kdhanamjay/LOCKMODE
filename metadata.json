@@ -1,6 +1,6 @@
 {
   "name": "EduGuard MDM",
-  "description": "Enterprise School Android Device Management (MDM) platform with central policy enforcement, kiosk lockdown, web filtering, app deployment, usage monitoring, and Android Enterprise DPC integration.",
+  "description": "Enterprise School MDM platform with central policy enforcement, Windows 10/11 kiosk lockdown (.exe / .vbs), web filtering, app deployment, and Android Enterprise DPC integration.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -183,6 +183,11 @@ namespace EduGuardKiosk {
     static class Program {
         [STAThread]
         static void Main() {
+            try {
+                ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;
+                ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
+            } catch {}
+
             bool isNew;
             using (Mutex mutex = new Mutex(true, \"EduGuardKiosk_SingleInstance_Mutex\", out isNew)) {
                 if (!isNew) return;
@@ -268,25 +273,28 @@ namespace EduGuardKiosk {
 }
 '@; [System.IO.File]::WriteAllText($env:CS_FILE, $code, [System.Text.Encoding]::UTF8)"
 
-:: Find C# Compiler in .NET Framework directory
+:: 1. Try standard Microsoft .NET Framework C# compiler (pre-installed on Windows 10/11)
 set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe"
 if not exist "%CSC_PATH%" set "CSC_PATH=%SystemRoot%\\Microsoft.NET\\Framework\\v4.0.30319\\csc.exe"
 
-if not exist "%CSC_PATH%" (
-  echo [!] Notice: C# compiler not found. Creating batch launcher fallback...
-  copy /y "%~dp0Launch-EduGuard-Watchdog.bat" "%~dp0EduGuard-Student-Kiosk.bat" >nul 2>&1
-  goto FINISHED
+if exist "%CSC_PATH%" (
+  echo [*] Compiling standalone windowless executable via .NET Framework...
+  "%CSC_PATH%" /target:winexe /platform:anycpu /optimize+ /out:"%OUT_EXE%" "%CS_FILE%" >nul 2>&1
 )
 
-echo [*] Compiling standalone windowless executable...
-"%CSC_PATH%" /target:winexe /optimize+ /out:"%OUT_EXE%" "%CS_FILE%" >nul 2>&1
+:: 2. Fallback: If csc.exe was missing or failed, compile via PowerShell CodeDom compiler
+if not exist "%OUT_EXE%" (
+  echo [*] Compiling via Windows PowerShell CodeDom Compiler engine...
+  powershell -NoProfile -Command ^
+    "$code = [System.IO.File]::ReadAllText($env:CS_FILE); $p = New-Object System.CodeDom.Compiler.CompilerParameters; $p.GenerateExecutable = $true; $p.OutputAssembly = $env:OUT_EXE; $p.CompilerOptions = '/target:winexe /optimize+ /platform:anycpu'; $p.ReferencedAssemblies.Add('System.dll'); (New-Object Microsoft.CSharp.CSharpCodeProvider).CompileAssemblyFromSource($p, $code)" >nul 2>&1
+)
 
 if exist "%OUT_EXE%" (
   echo.
   echo ====================================================================
   echo  [SUCCESS] Created: "%OUT_EXE%"
   echo ====================================================================
-  echo  You can now copy "EduGuard-Student-Kiosk.exe" to any student PC!
+  echo  EduGuard-Student-Kiosk.exe is ready!
   echo  - Windowless background supervisor (no console window)
   echo  - Auto-registers PC with unique machine name (WIN-%%COMPUTERNAME%%)
   echo  - Live monitoring and management in Admin Console
@@ -295,6 +303,12 @@ if exist "%OUT_EXE%" (
   echo  - Single-instance mutex prevents duplicate processes
   echo  - Isolated browser profile prevents reload loops and tab conflicts
   echo ====================================================================
+  echo.
+  set /p "RUN_NOW=Do you want to start EduGuard Student Kiosk right now? (Y/N) [default: Y]: "
+  if /i not "!RUN_NOW!"=="N" (
+      echo [*] Starting EduGuard-Student-Kiosk.exe...
+      start "" "%OUT_EXE%"
+  )
 ) else (
   echo [!] Compilation notice. Creating batch launcher fallback...
   copy /y "%~dp0Launch-EduGuard-Watchdog.bat" "%~dp0EduGuard-Student-Kiosk.bat" >nul 2>&1
@@ -316,7 +330,9 @@ echo ====================================================================
 echo [*] Terminating EduGuard-Student-Kiosk watchdog processes...
 taskkill /f /im EduGuard-Student-Kiosk.exe >nul 2>&1
 taskkill /f /im EduGuard-Student-Kiosk.bat >nul 2>&1
+taskkill /f /im Create-Student-Kiosk-EXE.bat >nul 2>&1
 taskkill /f /im Launch-EduGuard-Watchdog.bat >nul 2>&1
+taskkill /f /im wscript.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1
 taskkill /f /im cmd.exe /fi "WINDOWTITLE eq EduGuard MDM*" >nul 2>&1
 echo [*] Terminating Kiosk Edge browser instances...
 taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1

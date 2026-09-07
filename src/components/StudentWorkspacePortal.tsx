@@ -608,6 +608,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           studentRoll: currentDevice.assignedStudentRoll || 'PC-01',
           batteryLevel: currentDevice.batteryLevel,
           isCharging: currentDevice.isCharging,
+          isLocked: currentDevice.isLocked,
         });
 
         if (checkinRes?.isDeleted) {
