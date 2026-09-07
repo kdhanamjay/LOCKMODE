@@ -1316,6 +1316,11 @@ apiRouter.post('/simulator/heartbeat', (req: AuthenticatedRequest, res: Response
 
   const device = db.devices.find((d) => d.id === deviceId || d.deviceId === deviceId || d.deviceId.toLowerCase() === cleanDeviceId || d.id.toLowerCase() === cleanDeviceId);
   if (device) {
+    const statusChanged = (isLocked !== undefined && device.isLocked !== isLocked);
+    const appChanged = (currentApp !== undefined && device.currentActiveApp !== currentApp);
+    const chargingChanged = (isCharging !== undefined && device.isCharging !== isCharging);
+    const batteryChanged = (batteryLevel !== undefined && Math.abs((device.batteryLevel || 0) - batteryLevel) >= 5);
+
     if (batteryLevel !== undefined) device.batteryLevel = batteryLevel;
     if (isCharging !== undefined) device.isCharging = isCharging;
     if (currentApp !== undefined) device.currentActiveApp = currentApp;
@@ -1323,7 +1328,11 @@ apiRouter.post('/simulator/heartbeat', (req: AuthenticatedRequest, res: Response
     device.ipAddress = cleanIp;
     device.lastHeartbeat = new Date().toISOString();
     device.status = device.isLocked ? 'LOCKED' : 'ONLINE';
-    db.broadcast('device_update', device);
+
+    // Only broadcast device_update if properties actually changed to prevent continuous re-render loops
+    if (statusChanged || appChanged || chargingChanged || batteryChanged) {
+      db.broadcast('device_update', device);
+    }
   }
   return sendSuccess(res, { acknowledged: true, device, isDeleted: false });
 });
@@ -1888,10 +1897,28 @@ namespace EduGuardKiosk {
                                 wc.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
                                 string checkUrl = "${baseUrl}/api/devices/" + Uri.EscapeDataString(machineId) + "/kiosk-status";
                                 string statusJson = wc.DownloadString(checkUrl);
-                                if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
-                                    statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0 || 
-                                    statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
+                                if (statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
                                     return;
+                                }
+                                if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
+                                    statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0) {
+                                    // Workstation was unlocked by Administrator!
+                                    // Enter silent idle monitoring loop: Windows desktop is completely free.
+                                    // When Administrator clicks "Lock Device" from Admin Console, auto-lock PC immediately!
+                                    while (true) {
+                                        Thread.Sleep(3000);
+                                        try {
+                                            using (WebClient wc2 = new WebClient()) {
+                                                wc2.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
+                                                string idleJson = wc2.DownloadString(checkUrl);
+                                                if (idleJson.IndexOf("\\\"isDeleted\\\":true") >= 0) return;
+                                                if (idleJson.IndexOf("\\\"isLocked\\\":true") >= 0) {
+                                                    // Administrator dispatched Lock command! Break out to relaunch kiosk!
+                                                    break;
+                                                }
+                                            }
+                                        } catch {}
+                                    }
                                 }
                             }
                         } catch (WebException wex) {
@@ -2235,14 +2262,29 @@ echo [%time%] Starting EduGuard Student Kiosk for workstation !DEV_ID!...\r
 "!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
 \r
 :: Check if administrator unlocked or deleted this specific workstation from the Admin Console\r
-powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false -or $r.data.isDeleted -eq $true) { exit 0 } else { exit 1 } } catch { exit 0 }" >nul 2>&1\r
-if !errorlevel! equ 0 (\r
+powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false) { exit 1 } else { exit 0 } } catch { exit 0 }" >nul 2>&1\r
+if !errorlevel! equ 2 (\r
     echo.\r
     echo ====================================================================\r
-    echo  [UNLOCKED/REMOVED] Administrator unlocked or removed workstation!\r
-    echo  [SUCCESS] Exiting EduGuard Kiosk Watchdog. Windows Desktop restored.\r
+    echo  [REMOVED] Workstation was deleted from fleet inventory. Exiting.\r
     echo ====================================================================\r
     exit /b 0\r
+)\r
+if !errorlevel! equ 1 (\r
+    echo.\r
+    echo ====================================================================\r
+    echo  [UNLOCKED] Administrator unlocked workstation! Windows desktop free.\r
+    echo  [*] Standby monitoring: will auto-lock if Admin sends Lock command...\r
+    echo ====================================================================\r
+    :IDLE_MONITOR\r
+    timeout /t 3 /nobreak >nul\r
+    powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${baseUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $true -or $r.data.kioskActive -eq $true) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1\r
+    if !errorlevel! equ 2 exit /b 0\r
+    if !errorlevel! equ 0 (\r
+        echo [%time%] Administrator dispatched Lock command! Relaunching Kiosk immediately...\r
+        goto KIOSK_LOOP\r
+    )\r
+    goto IDLE_MONITOR\r
 )\r
 \r
 echo [%time%] Kiosk window closed. Re-launching in 2 seconds...\r

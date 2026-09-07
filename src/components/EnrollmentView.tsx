@@ -140,14 +140,29 @@ echo [%time%] Starting EduGuard Student Kiosk for workstation !DEV_ID!...
 "!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing
 
 :: Check if administrator unlocked or deleted this specific workstation from the Admin Console
-powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false -or $r.data.isDeleted -eq $true) { exit 0 } else { exit 1 } } catch { exit 0 }" >nul 2>&1
-if !errorlevel! equ 0 (
+powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false) { exit 1 } else { exit 0 } } catch { exit 0 }" >nul 2>&1
+if !errorlevel! equ 2 (
     echo.
     echo ====================================================================
-    echo  [UNLOCKED/REMOVED] Administrator unlocked or removed workstation!
-    echo  [SUCCESS] Exiting EduGuard Kiosk Watchdog. Windows Desktop restored.
+    echo  [REMOVED] Workstation was deleted from fleet inventory. Exiting.
     echo ====================================================================
     exit /b 0
+)
+if !errorlevel! equ 1 (
+    echo.
+    echo ====================================================================
+    echo  [UNLOCKED] Administrator unlocked workstation! Windows desktop free.
+    echo  [*] Standby monitoring: will auto-lock if Admin sends Lock command...
+    echo ====================================================================
+    :IDLE_MONITOR
+    timeout /t 3 /nobreak >nul
+    powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $true -or $r.data.kioskActive -eq $true) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+    if !errorlevel! equ 2 exit /b 0
+    if !errorlevel! equ 0 (
+        echo [%time%] Administrator dispatched Lock command! Relaunching Kiosk immediately...
+        goto KIOSK_LOOP
+    )
+    goto IDLE_MONITOR
 )
 
 echo [%time%] Kiosk window closed. Re-launching in 3 seconds (locked by exam policy)...
@@ -207,10 +222,28 @@ namespace EduGuardKiosk {
                                 wc.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
                                 string checkUrl = "${currentAppUrl}/api/devices/" + Uri.EscapeDataString(machineId) + "/kiosk-status";
                                 string statusJson = wc.DownloadString(checkUrl);
-                                if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
-                                    statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0 || 
-                                    statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
+                                if (statusJson.IndexOf("\\\"isDeleted\\\":true") >= 0) {
                                     return;
+                                }
+                                if (statusJson.IndexOf("\\\"isLocked\\\":false") >= 0 || 
+                                    statusJson.IndexOf("\\\"kioskActive\\\":false") >= 0) {
+                                    // Workstation was unlocked by Administrator!
+                                    // Enter silent idle monitoring loop: Windows desktop is completely free.
+                                    // When Administrator clicks "Lock Device" from Admin Console, auto-lock PC immediately!
+                                    while (true) {
+                                        Thread.Sleep(3000);
+                                        try {
+                                            using (WebClient wc2 = new WebClient()) {
+                                                wc2.Headers.Add("User-Agent", "EduGuard-Windows-Kiosk/1.4");
+                                                string idleJson = wc2.DownloadString(checkUrl);
+                                                if (idleJson.IndexOf("\\\"isDeleted\\\":true") >= 0) return;
+                                                if (idleJson.IndexOf("\\\"isLocked\\\":true") >= 0) {
+                                                    // Administrator dispatched Lock command! Break out to relaunch kiosk!
+                                                    break;
+                                                }
+                                            }
+                                        } catch {}
+                                    }
                                 }
                             }
                         } catch (WebException wex) {

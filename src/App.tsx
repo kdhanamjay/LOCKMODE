@@ -192,7 +192,6 @@ export function App() {
         setSelectedDeviceForModal((prev) =>
           prev?.id === updatedDev.id || prev?.deviceId === updatedDev.deviceId ? { ...prev, ...updatedDev } : prev
         );
-        showToast(`Device ${updatedDev.deviceId || ''} status: ${updatedDev.status || 'Updated'}`);
       } else if (eventType === 'device_enrolled') {
         const enrolledDev = data.device || data;
         setDevices((prev) => [enrolledDev, ...prev.filter((d) => d.id !== enrolledDev.id && d.deviceId !== enrolledDev.deviceId)]);
@@ -519,6 +518,10 @@ export function App() {
   const simulatorDevice = devices.find((d) => d.id === 'dev-tab-1024') || devices[0] || ({} as Device);
   const simulatorPolicy = policies.find((p) => p.id === simulatorDevice.policyId) || policies[0] || ({} as DevicePolicy);
 
+  const handleExitStudentWorkspace = useCallback(() => {
+    setIsStudentWorkspaceOpen(false);
+  }, []);
+
   if (isStudentWorkspaceOpen) {
     return (
       <StudentWorkspacePortal
@@ -526,7 +529,7 @@ export function App() {
         policy={simulatorPolicy}
         applications={applications}
         studyMaterials={studyMaterials}
-        onExit={() => setIsStudentWorkspaceOpen(false)}
+        onExit={handleExitStudentWorkspace}
       />
     );
   }
@@ -731,7 +734,7 @@ export function App() {
           policy={simulatorPolicy}
           applications={applications}
           studyMaterials={studyMaterials}
-          onExit={() => setIsStudentWorkspaceOpen(false)}
+          onExit={handleExitStudentWorkspace}
         />
       )}
 

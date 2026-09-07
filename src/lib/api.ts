@@ -119,7 +119,7 @@ export const api = {
       method: 'POST',
     }),
   getKioskStatus: async (id: string) =>
-    fetchJson<{ isLocked: boolean; kioskActive: boolean; status: string; kioskMode?: string; isDeleted?: boolean }>(`/devices/${id}/kiosk-status`),
+    fetchJson<{ isLocked: boolean; kioskActive: boolean; status: string; kioskMode?: string; isDeleted?: boolean; lockReason?: string }>(`/devices/${id}/kiosk-status`),
   syncDevicePolicy: async (id: string) =>
     fetchJson<{ device: Device; command: RemoteCommand }>(`/devices/${id}/sync`, {
       method: 'POST',

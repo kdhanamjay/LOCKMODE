@@ -257,9 +257,21 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     };
   });
 
-  // Remote Admin Unlock State
+  // Remote Admin Unlock & Master Administrative Lockdown States
   const [isRemotelyUnlocked, setIsRemotelyUnlocked] = useState(false);
   const [remoteUnlockReason, setRemoteUnlockReason] = useState<string>('');
+  const [isScreenLockedByAdmin, setIsScreenLockedByAdmin] = useState(false);
+  const [adminLockReason, setAdminLockReason] = useState<string>('');
+
+  const currentDeviceRef = useRef(currentDevice);
+  useEffect(() => {
+    currentDeviceRef.current = currentDevice;
+  }, [currentDevice]);
+
+  const onExitRef = useRef(onExit);
+  useEffect(() => {
+    onExitRef.current = onExit;
+  }, [onExit]);
 
   const defaultPolicy: DevicePolicy = propPolicy || {
     id: 'pol-std-kiosk',
@@ -576,12 +588,22 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     } catch (e) {}
   };
 
-  // Remote Unlock Action Trigger
+  // Remote Lock & Unlock Action Handlers
+  const handleRemoteLock = (reason?: string) => {
+    setIsRemotelyUnlocked(false);
+    setIsScreenLockedByAdmin(true);
+    const msg = reason || 'Workstation locked remotely by Exam Section Administrator.';
+    setAdminLockReason(msg);
+    setCurrentDevice((prev) => ({ ...prev, isLocked: true, status: 'LOCKED', lockReason: msg }));
+    triggerAlertSound();
+  };
+
   const handleRemoteUnlock = (reason?: string) => {
+    setIsScreenLockedByAdmin(false);
     setIsRemotelyUnlocked(true);
     setExitRequestStatus('APPROVED');
     setRemoteUnlockReason(reason || 'Administrator unlocked this workstation from Admin Console.');
-    setCurrentDevice((prev) => ({ ...prev, isLocked: false, status: 'ONLINE' }));
+    setCurrentDevice((prev) => ({ ...prev, isLocked: false, status: 'ONLINE', lockReason: undefined }));
     playUnlockSuccessSound();
 
     // Auto-attempt window.close after 2.5s
@@ -589,26 +611,27 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       try {
         window.close();
       } catch (e) {}
-      if (onExit) onExit();
+      if (onExitRef.current) onExitRef.current();
     }, 2500);
   };
 
-  // Auto-Register PC with Admin Console on start & periodic heartbeat/kiosk status polling
+  // Auto-Register PC with Admin Console on start (Runs ONCE on mount)
   useEffect(() => {
     const autoEnrollStation = async () => {
       try {
+        const curDev = currentDeviceRef.current;
         const checkinRes = await api.checkinDevice({
-          deviceId: currentDevice.deviceId,
-          name: currentDevice.name,
+          deviceId: curDev.deviceId,
+          name: curDev.name,
           platform: 'WINDOWS_PC',
           model: specs.modelName || 'Windows 11 PC (x64)',
-          schoolId: currentDevice.schoolId || 'sch-demo-01',
-          classId: currentDevice.classId || 'cls-12-a',
-          studentName: currentDevice.assignedStudentName || `Student Station (${currentDevice.deviceId})`,
-          studentRoll: currentDevice.assignedStudentRoll || 'PC-01',
-          batteryLevel: currentDevice.batteryLevel,
-          isCharging: currentDevice.isCharging,
-          isLocked: currentDevice.isLocked,
+          schoolId: curDev.schoolId || 'sch-demo-01',
+          classId: curDev.classId || 'cls-12-a',
+          studentName: curDev.assignedStudentName || `Student Station (${curDev.deviceId})`,
+          studentRoll: curDev.assignedStudentRoll || 'PC-01',
+          batteryLevel: curDev.batteryLevel,
+          isCharging: curDev.isCharging,
+          isLocked: curDev.isLocked,
         });
 
         if (checkinRes?.isDeleted) {
@@ -623,9 +646,6 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
             ipAddress: checkinRes.device.ipAddress || prev.ipAddress,
             isLocked: checkinRes.isLocked ?? prev.isLocked,
           }));
-          if (checkinRes.isLocked === false && currentDevice.isLocked) {
-            handleRemoteUnlock('Administrator unlocked this workstation from Admin Console.');
-          }
         }
       } catch (err) {
         console.warn('Auto-checkin note:', err);
@@ -633,15 +653,16 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     };
     autoEnrollStation();
 
-    // Heartbeat & status check interval (every 4 seconds)
+    // Heartbeat & status polling interval (every 4 seconds)
     const hbInterval = setInterval(async () => {
       try {
+        const cur = currentDeviceRef.current;
         const hb = await api.simulatorHeartbeat({
-          deviceId: currentDevice.deviceId,
-          batteryLevel: currentDevice.batteryLevel,
-          isCharging: currentDevice.isCharging,
+          deviceId: cur.deviceId,
+          batteryLevel: cur.batteryLevel,
+          isCharging: cur.isCharging,
           currentApp: 'EduGuard Student Workspace Kiosk',
-          isLocked: currentDevice.isLocked,
+          isLocked: cur.isLocked,
         });
 
         if (hb?.isDeleted) {
@@ -649,49 +670,50 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           return;
         }
 
-        // Query status in case SSE was disconnected
-        const status = await api.getKioskStatus(currentDevice.deviceId);
+        // Query kiosk-status fallback
+        const status = await api.getKioskStatus(cur.deviceId);
         if (status?.isDeleted) {
           handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.');
           return;
         }
-        if (status && status.isLocked === false && currentDevice.isLocked) {
+        if (status && status.isLocked === false && cur.isLocked) {
           handleRemoteUnlock('Administrator unlocked this workstation from Admin Console.');
-        } else if (status && status.isLocked === true && !currentDevice.isLocked) {
-          setIsRemotelyUnlocked(false);
-          setCurrentDevice((prev) => ({ ...prev, isLocked: true, status: 'LOCKED' }));
+        } else if (status && status.isLocked === true && status.status === 'LOCKED' && !cur.isLocked) {
+          handleRemoteLock(status.lockReason || 'Administrator placed this device under security lockdown.');
         }
       } catch (e) {}
     }, 4000);
 
     return () => clearInterval(hbInterval);
-  }, [currentDevice.deviceId, currentDevice.isLocked]);
+  }, []);
 
-  // Auto-Sync Function with Admin Console
-  const runFullSync = async () => {
+  // Silent Auto-Sync & Manual Sync Function with Admin Console
+  const runFullSync = async (isManual = false) => {
     try {
-      setIsSyncing(true);
+      if (isManual) setIsSyncing(true);
+      const curDev = currentDeviceRef.current;
       const [policiesData, appsData, messagesData, materialsData] = await Promise.all([
         api.getPolicies().catch(() => []),
         api.getApplications().catch(() => []),
-        api.getDeviceMessages(currentDevice.id).catch(() => []),
+        api.getDeviceMessages(curDev.id).catch(() => []),
         api.getStudyMaterials().catch(() => []),
       ]);
 
       if (policiesData.length > 0) {
-        const matched = policiesData.find((p) => p.id === currentDevice.policyId) || policiesData[0];
-        setCurrentPolicy(matched);
+        const matched = policiesData.find((p) => p.id === curDev.policyId) || policiesData[0];
+        setCurrentPolicy((prev) => (prev.id !== matched.id || prev.version !== matched.version ? matched : prev));
       }
 
       if (appsData.length > 0) {
         const approved = appsData.filter((a) => a.isApproved && a.category !== 'RESTRICTED');
-        setInstalledApps(approved.length > 0 ? approved : appsData);
+        const listToSet = approved.length > 0 ? approved : appsData;
+        setInstalledApps((prev) => (prev.length !== listToSet.length ? listToSet : prev));
       }
 
       if (messagesData.length > 0) {
-        setMessages(messagesData);
+        setMessages((prev) => (prev.length !== messagesData.length ? messagesData : prev));
         const unacked = messagesData.find(
-          (m) => m.requireAcknowledgment && !m.acknowledgedDeviceIds?.includes(currentDevice.deviceId)
+          (m) => m.requireAcknowledgment && !m.acknowledgedDeviceIds?.includes(curDev.deviceId)
         );
         if (unacked && !activeAnnouncement) {
           playBroadcastChime();
@@ -700,16 +722,20 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       }
 
       if (materialsData.length > 0) {
-        setStudyMaterials(materialsData);
+        setStudyMaterials((prev) => (prev.length !== materialsData.length ? materialsData : prev));
       }
 
       setLastSyncTime(new Date());
-      setSyncFeedback(`Auto-Sync Active • Policy v${currentPolicy.version} • ${materialsData.length} Study Notes Available`);
-      setTimeout(() => setSyncFeedback(null), 3500);
+
+      // Only display notification if manually triggered to prevent continuous re-render flicker
+      if (isManual) {
+        setSyncFeedback(`Sync Complete • Policy v${currentPolicy.version} • ${materialsData.length} Study Notes Available`);
+        setTimeout(() => setSyncFeedback(null), 3000);
+      }
     } catch (err) {
-      console.warn('Sync failed, using offline cache', err);
+      console.warn('Sync notice:', err);
     } finally {
-      setIsSyncing(false);
+      if (isManual) setIsSyncing(false);
     }
   };
 
@@ -717,7 +743,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      runFullSync();
+      runFullSync(false);
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -732,11 +758,12 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     };
   }, []);
 
-  // SSE real-time listener for live broadcast notices & newly uploaded study materials without page refresh!
+  // SSE real-time listener: mounted ONCE with zero reload loops
   useEffect(() => {
-    runFullSync();
+    runFullSync(false);
 
     const unsubscribe = subscribeToMdmEvents((eventType, data) => {
+      const curDev = currentDeviceRef.current;
       if (eventType === 'study_material_uploaded') {
         setStudyMaterials((prev) => [data, ...prev.filter((m) => m.id !== data.id)]);
         setViolationToast(`📚 New ${data.subject} Study Material Uploaded: "${data.title}"`);
@@ -749,43 +776,38 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         setMessages((prev) => [data, ...prev.filter((m) => m.id !== data.id)]);
         setActiveAnnouncement(data);
       } else if (eventType === 'device_update') {
-        if (data.id === currentDevice.id || data.deviceId === currentDevice.deviceId) {
+        if (data.id === curDev.id || data.deviceId === curDev.deviceId) {
           setCurrentDevice((prev) => ({ ...prev, ...data }));
-          if (data.isLocked === false && currentDevice.isLocked) {
+          if (data.isLocked === false && curDev.isLocked) {
             handleRemoteUnlock('Administrator unlocked this device remotely.');
-          } else if (data.isLocked === true && !currentDevice.isLocked) {
-            setIsRemotelyUnlocked(false);
-            setViolationToast('🔒 Device Locked: Administrator has placed this device under remote security lockdown.');
-            setTimeout(() => setViolationToast(null), 4000);
+          } else if (data.isLocked === true && !curDev.isLocked) {
+            handleRemoteLock(data.lockReason || 'Administrator has placed this device under security lockdown.');
           }
         }
       } else if (eventType === 'device_locked') {
         const matchesDevice =
-          data.deviceId === currentDevice.deviceId ||
-          data.deviceId === currentDevice.id ||
-          data.id === currentDevice.id ||
-          data.id === currentDevice.deviceId;
+          data.deviceId === curDev.deviceId ||
+          data.deviceId === curDev.id ||
+          data.id === curDev.id ||
+          data.id === curDev.deviceId;
         if (matchesDevice) {
-          setIsRemotelyUnlocked(false);
-          setCurrentDevice((prev) => ({ ...prev, isLocked: true, status: 'LOCKED' }));
-          setViolationToast('🔒 Device Locked: Administrator placed this device under security lockdown.');
-          setTimeout(() => setViolationToast(null), 4000);
+          handleRemoteLock(data.reason || 'Administrator placed this device under security lockdown.');
         }
       } else if (eventType === 'device_deleted') {
         const matchesDevice =
-          data.deviceId === currentDevice.deviceId ||
-          data.deviceId === currentDevice.id ||
-          data.id === currentDevice.id ||
-          data.id === currentDevice.deviceId;
+          data.deviceId === curDev.deviceId ||
+          data.deviceId === curDev.id ||
+          data.id === curDev.id ||
+          data.id === curDev.deviceId;
         if (matchesDevice) {
           handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.');
         }
       } else if (eventType === 'kiosk_exit_approved' || eventType === 'device_unlocked') {
         const matchesDevice =
-          data.deviceId === currentDevice.deviceId ||
-          data.deviceId === currentDevice.id ||
-          data.id === currentDevice.id ||
-          data.id === currentDevice.deviceId ||
+          data.deviceId === curDev.deviceId ||
+          data.deviceId === curDev.id ||
+          data.id === curDev.id ||
+          data.id === curDev.deviceId ||
           (exitRequestIdRef.current && (data.requestId === exitRequestIdRef.current || data.id === exitRequestIdRef.current));
 
         if (matchesDevice) {
@@ -794,8 +816,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         }
       } else if (eventType === 'kiosk_exit_rejected') {
         const matchesDevice =
-          data.deviceId === currentDevice.deviceId ||
-          data.deviceId === currentDevice.id ||
+          data.deviceId === curDev.deviceId ||
+          data.deviceId === curDev.id ||
           (exitRequestIdRef.current && (data.requestId === exitRequestIdRef.current || data.id === exitRequestIdRef.current));
 
         if (matchesDevice) {
@@ -806,7 +828,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     });
 
     return () => unsubscribe();
-  }, [currentDevice.id, currentDevice.deviceId, onExit]);
+  }, []);
 
   // Polling fallback for exit request status when waiting for admin approval
   useEffect(() => {
@@ -1134,7 +1156,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
           {/* Manual Full Sync */}
           <button
-            onClick={runFullSync}
+            onClick={() => runFullSync(true)}
             disabled={isSyncing}
             title="Auto-sync policies, notices & PDF notes with school server"
             className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg cursor-pointer transition-colors"
@@ -1178,15 +1200,13 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         </div>
       </header>
 
-      {/* Sync Toast Feedback Banner */}
+      {/* Sync Toast Floating Feedback (Fixed non-layout-shifting pill) */}
       {syncFeedback && (
-        <div className="bg-emerald-950/90 text-emerald-200 border-b border-emerald-800 text-xs py-1.5 px-4 flex items-center justify-between animate-in slide-in-from-top duration-150">
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>{syncFeedback}</span>
-          </div>
-          <span className="text-[10px] text-emerald-400 font-mono">
-            {lastSyncTime.toLocaleTimeString()}
+        <div className="fixed top-14 left-1/2 -translate-x-1/2 z-50 bg-emerald-900/95 text-emerald-100 border border-emerald-500/50 shadow-2xl rounded-full text-xs py-1.5 px-4 flex items-center space-x-2.5 backdrop-blur-md animate-in fade-in slide-in-from-top-2 duration-150 pointer-events-none">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="font-medium">{syncFeedback}</span>
+          <span className="text-[10px] text-emerald-300/80 font-mono pl-1.5 border-l border-emerald-700">
+            {lastSyncTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
         </div>
       )}
@@ -2443,7 +2463,60 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         </div>
       )}
 
-      {/* 8. Remote Kiosk Exit / Unlock Approved Modal */}
+      {/* 8. Master Administrative Remote Security Lockdown Screen */}
+      {isScreenLockedByAdmin && (
+        <div className="fixed inset-0 z-[99999] bg-gray-950/95 backdrop-blur-xl flex items-center justify-center p-4 select-none animate-in fade-in duration-200">
+          <div className="bg-gray-900 border-2 border-rose-600/80 text-white rounded-3xl p-8 max-w-lg w-full shadow-2xl shadow-rose-950/50 space-y-6 text-center animate-in zoom-in-95">
+            <div className="w-20 h-20 rounded-3xl bg-rose-950/60 text-rose-400 border border-rose-500/40 flex items-center justify-center mx-auto shadow-inner shadow-rose-500/20">
+              <ShieldAlert className="w-10 h-10 text-rose-500 animate-pulse" />
+            </div>
+
+            <div className="space-y-2">
+              <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-rose-500/20 border border-rose-500/30 text-rose-300 text-[11px] font-bold uppercase tracking-wider rounded-full">
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                <span>Central Security Lockdown</span>
+              </div>
+              <h3 className="text-2xl font-bold tracking-tight text-white">Workstation Locked Remotely</h3>
+              <p className="text-sm text-gray-400 leading-relaxed">
+                The Exam Section Administrator has enacted a real-time security lock on this workstation.
+              </p>
+              {adminLockReason && (
+                <div className="mt-2 p-3.5 bg-rose-950/40 border border-rose-800/40 rounded-2xl text-xs text-rose-200 font-medium">
+                  &ldquo;{adminLockReason}&rdquo;
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-gray-950/60 border border-gray-800 rounded-2xl text-left space-y-2 text-xs text-gray-400">
+              <div className="flex justify-between">
+                <span>Station ID:</span>
+                <span className="font-mono font-bold text-gray-200">{currentDevice.deviceId}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Candidate / Roll:</span>
+                <span className="font-semibold text-gray-200">{currentDevice.assignedStudentName || 'Student'} ({currentDevice.assignedStudentRoll || 'PC-01'})</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Enforcement Level:</span>
+                <span className="font-semibold text-rose-400">Active Strict Kiosk Enforced</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Status:</span>
+                <span className="font-semibold text-amber-400 flex items-center space-x-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  <span>Awaiting Admin Console Signal</span>
+                </span>
+              </div>
+            </div>
+
+            <p className="text-[11px] text-gray-500">
+              This PC will automatically unlock the moment the Administrator clicks &ldquo;Unlock Device&rdquo; from the Admin Console.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 9. Remote Kiosk Exit / Unlock Approved Modal */}
       {isRemotelyUnlocked && (
         <div className="fixed inset-0 z-[99999] bg-gray-950/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
           <div className="bg-white text-gray-950 rounded-3xl p-8 max-w-lg w-full shadow-2xl border border-emerald-200 space-y-6 text-center">
