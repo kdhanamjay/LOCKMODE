@@ -204,6 +204,18 @@ export function App() {
         api.getDashboardStats().then(setStats).catch(() => {});
         api.getClasses().then(setClasses).catch(() => {});
         api.getSchools().then(setSchools).catch(() => {});
+      } else if (eventType === 'device_deleted') {
+        const delId = data.id;
+        const delDeviceId = data.deviceId;
+        setDevices((prev) => prev.filter((d) => d.id !== delId && d.deviceId !== delDeviceId));
+        setExitRequests((prev) => prev.filter((r) => r.deviceId !== delDeviceId && r.deviceId !== delId));
+        setSelectedDeviceForModal((prev) =>
+          prev?.id === delId || prev?.deviceId === delDeviceId ? null : prev
+        );
+        showToast(`🗑️ Device ${data.name || delDeviceId} deleted & unenrolled`, 'alert');
+        api.getDashboardStats().then(setStats).catch(() => {});
+        api.getClasses().then(setClasses).catch(() => {});
+        api.getSchools().then(setSchools).catch(() => {});
       } else if (eventType === 'student_created') {
         setStudents((prev) => [data, ...prev.filter((s) => s.id !== data.id)]);
       } else if (eventType === 'class_updated') {
@@ -237,10 +249,33 @@ export function App() {
         setExitRequests((prev) => [data, ...prev.filter((r) => r.id !== data.id)]);
         showToast(`🔑 Kiosk Exit Requested: ${data.studentName} (${data.deviceId})`, 'alert');
       } else if (eventType === 'kiosk_exit_approved') {
-        setExitRequests((prev) => prev.map((r) => (r.id === data.id ? { ...r, ...data } : r)));
+        const reqId = data.id || data.requestId;
+        setExitRequests((prev) =>
+          prev.map((r) =>
+            r.id === reqId || r.id === data.id
+              ? { ...r, ...data, status: 'APPROVED' }
+              : r
+          )
+        );
+        if (data.deviceId) {
+          setDevices((prev) =>
+            prev.map((d) =>
+              d.id === data.deviceId || d.deviceId === data.deviceId
+                ? { ...d, isLocked: false, status: 'ONLINE' }
+                : d
+            )
+          );
+        }
         showToast(`✅ Approved Kiosk Exit for ${data.studentName || data.deviceId}`);
       } else if (eventType === 'kiosk_exit_rejected') {
-        setExitRequests((prev) => prev.map((r) => (r.id === data.id ? { ...r, ...data } : r)));
+        const reqId = data.id || data.requestId;
+        setExitRequests((prev) =>
+          prev.map((r) =>
+            r.id === reqId || r.id === data.id
+              ? { ...r, ...data, status: 'REJECTED' }
+              : r
+          )
+        );
         showToast(`❌ Rejected Kiosk Exit for ${data.studentName || data.deviceId}`, 'alert');
       } else if (eventType === 'policy_published') {
         showToast(`Policy v${data.policy?.version} published fleet-wide!`);
@@ -268,11 +303,11 @@ export function App() {
   const handleUnlockDevice = async (deviceId: string) => {
     try {
       const res = await api.unlockDevice(deviceId);
-      setDevices((prev) => prev.map((d) => (d.id === deviceId ? res.device : d)));
-      if (selectedDeviceForModal?.id === deviceId) {
+      setDevices((prev) => prev.map((d) => (d.id === deviceId || d.deviceId === deviceId ? res.device : d)));
+      if (selectedDeviceForModal?.id === deviceId || selectedDeviceForModal?.deviceId === deviceId) {
         setSelectedDeviceForModal(res.device);
       }
-      showToast(`Device ${res.device.deviceId} unlocked successfully!`);
+      showToast(`Workstation ${res.device.deviceId} unlocked and exited from Kiosk!`);
     } catch (e: any) {
       showToast(e.message || 'Unlock command failed', 'alert');
     }
@@ -297,6 +332,31 @@ export function App() {
       showToast(`Reboot command dispatched to device!`);
     } catch (e: any) {
       showToast(e.message || 'Reboot command failed', 'alert');
+    }
+  };
+
+  const handleDeleteDevice = async (deviceId: string) => {
+    try {
+      const res = await api.deleteDevice(deviceId);
+      setDevices((prev) =>
+        prev.filter(
+          (d) =>
+            d.id !== deviceId &&
+            d.deviceId !== deviceId &&
+            d.id !== res.deletedId &&
+            d.deviceId !== res.deletedDeviceId
+        )
+      );
+      if (selectedDeviceForModal?.id === deviceId || selectedDeviceForModal?.deviceId === deviceId) {
+        setSelectedDeviceForModal(null);
+      }
+      setExitRequests((prev) =>
+        prev.filter((r) => r.deviceId !== deviceId && r.deviceId !== res.deletedDeviceId)
+      );
+      showToast(`Device ${res.name || deviceId} unenrolled and deleted from fleet inventory.`);
+      loadAllData();
+    } catch (e: any) {
+      showToast(e.message || 'Failed to delete device', 'alert');
     }
   };
 
@@ -356,7 +416,16 @@ export function App() {
   const handleApproveExitRequest = async (requestId: string, note?: string) => {
     try {
       const res = await api.approveKioskExitRequest(requestId, note);
-      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? res : r)));
+      setExitRequests((prev) => prev.map((r) => (r.id === requestId ? { ...r, ...res, status: 'APPROVED' } : r)));
+      if (res.deviceId) {
+        setDevices((prev) =>
+          prev.map((d) =>
+            d.id === res.deviceId || d.deviceId === res.deviceId
+              ? { ...d, isLocked: false, status: 'ONLINE' }
+              : d
+          )
+        );
+      }
       showToast(`Kiosk exit approved for ${res.studentName || res.deviceId}`);
       loadAllData();
     } catch (e: any) {
@@ -450,18 +519,19 @@ export function App() {
   const simulatorDevice = devices.find((d) => d.id === 'dev-tab-1024') || devices[0] || ({} as Device);
   const simulatorPolicy = policies.find((p) => p.id === simulatorDevice.policyId) || policies[0] || ({} as DevicePolicy);
 
+  if (isStudentWorkspaceOpen) {
+    return (
+      <StudentWorkspacePortal
+        device={simulatorDevice}
+        policy={simulatorPolicy}
+        applications={applications}
+        studyMaterials={studyMaterials}
+        onExit={() => setIsStudentWorkspaceOpen(false)}
+      />
+    );
+  }
+
   if (!isAuthenticated || !currentUser) {
-    if (isStudentWorkspaceOpen) {
-      return (
-        <StudentWorkspacePortal
-          device={simulatorDevice}
-          policy={simulatorPolicy}
-          applications={applications}
-          studyMaterials={studyMaterials}
-          onExit={() => setIsStudentWorkspaceOpen(false)}
-        />
-      );
-    }
     return (
       <AdminLoginView
         onLoginSuccess={handleLoginSuccess}
@@ -503,6 +573,8 @@ export function App() {
         onToggleSimulator={() => setIsSimulatorOpen(!isSimulatorOpen)}
         onLaunchStudentWorkspace={() => setIsStudentWorkspaceOpen(true)}
         onLogout={handleLogout}
+        pendingExitRequestsCount={exitRequests.filter((r) => r.status === 'PENDING').length}
+        onOpenExitRequestsModal={() => setIsExitRequestsModalOpen(true)}
       />
 
       {/* Content Area */}
@@ -537,6 +609,8 @@ export function App() {
                 onOpenDeviceDetail={setSelectedDeviceForModal}
                 onQuickLock={handleLockDevice}
                 onQuickUnlock={handleUnlockDevice}
+                pendingExitRequestsCount={exitRequests.filter((r) => r.status === 'PENDING').length}
+                onOpenExitRequestsModal={() => setIsExitRequestsModalOpen(true)}
               />
             )}
 
@@ -559,7 +633,11 @@ export function App() {
                 onUnlockDevice={handleUnlockDevice}
                 onSyncDevice={handleSyncDevice}
                 onRebootDevice={handleRebootDevice}
+                onDeleteDevice={handleDeleteDevice}
                 onRefreshList={loadAllData}
+                exitRequests={exitRequests}
+                onApproveExitRequest={handleApproveExitRequest}
+                onOpenExitRequestsModal={() => setIsExitRequestsModalOpen(true)}
               />
             )}
 
@@ -666,6 +744,7 @@ export function App() {
           onUnlock={handleUnlockDevice}
           onSync={handleSyncDevice}
           onReboot={handleRebootDevice}
+          onDelete={handleDeleteDevice}
           policies={policies}
           applications={applications}
           usageRecords={usageRecords}
@@ -676,6 +755,7 @@ export function App() {
       {/* Kiosk Exit Authorization & Approval Modal for Administrator */}
       {isExitRequestsModalOpen && (
         <KioskExitApprovalModal
+          isOpen={isExitRequestsModalOpen}
           requests={exitRequests}
           onClose={() => setIsExitRequestsModalOpen(false)}
           onApprove={handleApproveExitRequest}

@@ -2,7 +2,7 @@
 // 100% Offline Operational + Auto-Sync with Server When Online + Keyboard & DevTools Lockdown + Alt+F4 Protection
 // Includes Class-wise Subject PDF Notes Reader & Live In-App Study Hub
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Wifi,
   WifiOff,
@@ -49,6 +49,7 @@ import {
   ShieldCheck,
   Terminal,
   Volume2,
+  LogOut,
 } from 'lucide-react';
 import { Device, Application, DevicePolicy, AdminBroadcastMessage, Deployment, WebFilterRule, StudyMaterial, School, SchoolClass } from '../types/mdm';
 import { api, subscribeToMdmEvents } from '../lib/api';
@@ -152,27 +153,90 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
   const specs = detectLocalMachineSpecs();
 
-  // Active Device state (prop > local storage > fallback station)
+  // Active Device state (prop > URL device_id > local storage > generated station)
   const [currentDevice, setCurrentDevice] = useState<Device>(() => {
-    if (propDevice) return propDevice;
-    if (localEnrolledDevice) return localEnrolledDevice;
+    // 1. Check URL parameters for explicit machine identifier
+    let urlDeviceId: string | null = null;
+    let urlDeviceName: string | null = null;
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      urlDeviceId = params.get('device_id');
+      urlDeviceName = params.get('device_name');
+    }
+
+    let stationId = urlDeviceId;
+    if (!stationId && typeof window !== 'undefined') {
+      stationId = localStorage.getItem('eduguard_workstation_id');
+    }
+    if (!stationId) {
+      stationId = `WIN-${Math.floor(1000 + Math.random() * 9000)}`;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('eduguard_workstation_id', stationId);
+      }
+    }
+
+    if (urlDeviceId) {
+      return {
+        id: `dev-${urlDeviceId.toLowerCase()}`,
+        deviceId: urlDeviceId,
+        name: urlDeviceName ? `Workstation (${urlDeviceName})` : `Windows Station (${urlDeviceId})`,
+        schoolId: 'sch-demo-01',
+        schoolName: 'Demo Examination Center',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        assignedStudentName: urlDeviceName ? `Workstation User (${urlDeviceName})` : `Station User (${urlDeviceId})`,
+        assignedStudentRoll: `PC-${urlDeviceId.replace(/^WIN-/, '').slice(-4) || '01'}`,
+        model: specs.modelName || 'Windows 11 PC (x64)',
+        manufacturer: 'EduGuard Windows Client',
+        platform: 'WINDOWS_PC',
+        osVersion: specs.osName || 'Windows 11 (23H2/24H2)',
+        securityPatchLevel: '2026-08-01',
+        status: 'LOCKED',
+        isLocked: true, // Kiosk starts locked by policy
+        kioskModeEnabled: true,
+        policyId: 'pol-exam-lockdown',
+        lastSyncTimestamp: new Date().toISOString(),
+        lastHeartbeatTimestamp: new Date().toISOString(),
+        batteryLevel: 100,
+        isCharging: true,
+        storageUsedGb: 34.2,
+        storageTotalGb: 256,
+        ramUsedMb: 3200,
+        ramTotalMb: specs.ramGb * 1024,
+        currentActiveApp: 'com.eduguard.workspace',
+        ipAddress: '127.0.0.1',
+        macAddress: '74:D4:35:E1:99:A2',
+        isTampered: false,
+        enrollmentType: 'ZERO_TOUCH_QR',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    if (propDevice && propDevice.deviceId && propDevice.deviceId !== 'dev-tab-1024' && propDevice.deviceId !== 'TAB-1024') {
+      return { ...propDevice, isLocked: true };
+    }
+    if (localEnrolledDevice) {
+      return { ...localEnrolledDevice, deviceId: stationId, isLocked: true };
+    }
+
     return {
-      id: 'dev-local-pc',
-      deviceId: `PC-LAB-${Math.floor(100 + Math.random() * 900)}`,
-      name: `Classroom Station (${specs.modelName})`,
-      schoolId: 'sch-greenwood-01',
-      schoolName: 'Greenwood High School',
+      id: `dev-${stationId.toLowerCase()}`,
+      deviceId: stationId,
+      name: urlDeviceName ? `Workstation (${urlDeviceName})` : `Windows Station (${stationId})`,
+      schoolId: 'sch-demo-01',
+      schoolName: 'Demo Examination Center',
       classId: 'cls-12-a',
       className: 'Class XII-A',
-      assignedStudentName: 'Student Workspace',
-      assignedStudentRoll: 'RN-104',
-      model: specs.modelName,
-      manufacturer: 'EduGuard Systems',
-      platform: specs.platform,
-      osVersion: specs.osName,
+      assignedStudentName: `Student Station (${stationId})`,
+      assignedStudentRoll: `PC-${stationId.slice(-4)}`,
+      model: specs.modelName || 'Windows 11 PC (x64)',
+      manufacturer: 'EduGuard Windows Client',
+      platform: 'WINDOWS_PC',
+      osVersion: specs.osName || 'Windows 11 (23H2/24H2)',
       securityPatchLevel: '2026-08-01',
       status: 'ONLINE',
-      isLocked: false,
+      isLocked: true, // Kiosk starts locked by policy
       kioskModeEnabled: true,
       policyId: 'pol-exam-lockdown',
       lastSyncTimestamp: new Date().toISOString(),
@@ -188,10 +252,14 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       macAddress: '74:D4:35:E1:99:A2',
       isTampered: false,
       enrollmentType: 'ZERO_TOUCH_QR',
-      createdAt: '2026-08-15T08:00:00.000Z',
+      createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
   });
+
+  // Remote Admin Unlock State
+  const [isRemotelyUnlocked, setIsRemotelyUnlocked] = useState(false);
+  const [remoteUnlockReason, setRemoteUnlockReason] = useState<string>('');
 
   const defaultPolicy: DevicePolicy = propPolicy || {
     id: 'pol-std-kiosk',
@@ -274,6 +342,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   const [exitRequestStatus, setExitRequestStatus] = useState<'IDLE' | 'PENDING' | 'APPROVED' | 'REJECTED'>('IDLE');
   const [exitRequestError, setExitRequestError] = useState<string | null>(null);
   const [exitRequestId, setExitRequestId] = useState<string | null>(null);
+  const exitRequestIdRef = useRef<string | null>(null);
+  exitRequestIdRef.current = exitRequestId;
   const [isSubmittingExit, setIsSubmittingExit] = useState(false);
   const [showTeacherOverridePin, setShowTeacherOverridePin] = useState(false);
   const [teacherOverridePin, setTeacherOverridePin] = useState('');
@@ -453,6 +523,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
     // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isRemotelyUnlocked) return;
       e.preventDefault();
       e.returnValue = 'EduGuard Student Kiosk is locked. Administrator approval is required to exit.';
       return 'EduGuard Student Kiosk is locked. Administrator approval is required to exit.';
@@ -461,16 +532,19 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     // 9. Prevent browser back button navigation via History API trap
     window.history.pushState(null, '', window.location.href);
     const handlePopState = () => {
+      if (isRemotelyUnlocked) return;
       window.history.pushState(null, '', window.location.href);
       setViolationToast('🚫 Navigation Lockdown: Back button is disabled in EduGuard Student Workspace.');
       setTimeout(() => setViolationToast(null), 3000);
     };
 
-    window.addEventListener('keydown', handleKeyDown, true);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('blur', handleWindowBlur);
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('popstate', handlePopState);
+    if (!isRemotelyUnlocked) {
+      window.addEventListener('keydown', handleKeyDown, true);
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('blur', handleWindowBlur);
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      window.addEventListener('popstate', handlePopState);
+    }
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown, true);
@@ -479,7 +553,118 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('popstate', handlePopState);
     };
-  }, [currentDevice.id, currentDevice.deviceId]);
+  }, [currentDevice.id, currentDevice.deviceId, isRemotelyUnlocked]);
+
+  // Melodic chime when admin unlocks the PC
+  const playUnlockSuccessSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now); // C5
+      osc.frequency.setValueAtTime(659.25, now + 0.12); // E5
+      osc.frequency.setValueAtTime(783.99, now + 0.24); // G5
+      osc.frequency.setValueAtTime(1046.50, now + 0.36); // C6
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.8);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.8);
+    } catch (e) {}
+  };
+
+  // Remote Unlock Action Trigger
+  const handleRemoteUnlock = (reason?: string) => {
+    setIsRemotelyUnlocked(true);
+    setExitRequestStatus('APPROVED');
+    setRemoteUnlockReason(reason || 'Administrator unlocked this workstation from Admin Console.');
+    setCurrentDevice((prev) => ({ ...prev, isLocked: false, status: 'ONLINE' }));
+    playUnlockSuccessSound();
+
+    // Auto-attempt window.close after 2.5s
+    setTimeout(() => {
+      try {
+        window.close();
+      } catch (e) {}
+      if (onExit) onExit();
+    }, 2500);
+  };
+
+  // Auto-Register PC with Admin Console on start & periodic heartbeat/kiosk status polling
+  useEffect(() => {
+    const autoEnrollStation = async () => {
+      try {
+        const checkinRes = await api.checkinDevice({
+          deviceId: currentDevice.deviceId,
+          name: currentDevice.name,
+          platform: 'WINDOWS_PC',
+          model: specs.modelName || 'Windows 11 PC (x64)',
+          schoolId: currentDevice.schoolId || 'sch-demo-01',
+          classId: currentDevice.classId || 'cls-12-a',
+          studentName: currentDevice.assignedStudentName || `Student Station (${currentDevice.deviceId})`,
+          studentRoll: currentDevice.assignedStudentRoll || 'PC-01',
+          batteryLevel: currentDevice.batteryLevel,
+          isCharging: currentDevice.isCharging,
+        });
+
+        if (checkinRes?.isDeleted) {
+          handleRemoteUnlock('This workstation was unenrolled and deleted from fleet inventory.');
+          return;
+        }
+
+        if (checkinRes?.device) {
+          setCurrentDevice((prev) => ({
+            ...prev,
+            ...checkinRes.device,
+            ipAddress: checkinRes.device.ipAddress || prev.ipAddress,
+            isLocked: checkinRes.isLocked ?? prev.isLocked,
+          }));
+          if (checkinRes.isLocked === false && currentDevice.isLocked) {
+            handleRemoteUnlock('Administrator unlocked this workstation from Admin Console.');
+          }
+        }
+      } catch (err) {
+        console.warn('Auto-checkin note:', err);
+      }
+    };
+    autoEnrollStation();
+
+    // Heartbeat & status check interval (every 4 seconds)
+    const hbInterval = setInterval(async () => {
+      try {
+        const hb = await api.simulatorHeartbeat({
+          deviceId: currentDevice.deviceId,
+          batteryLevel: currentDevice.batteryLevel,
+          isCharging: currentDevice.isCharging,
+          currentApp: 'EduGuard Student Workspace Kiosk',
+          isLocked: currentDevice.isLocked,
+        });
+
+        if (hb?.isDeleted) {
+          handleRemoteUnlock('This workstation was unenrolled and deleted from fleet inventory.');
+          return;
+        }
+
+        // Query status in case SSE was disconnected
+        const status = await api.getKioskStatus(currentDevice.deviceId);
+        if (status?.isDeleted) {
+          handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.');
+          return;
+        }
+        if (status && status.isLocked === false && currentDevice.isLocked) {
+          handleRemoteUnlock('Administrator unlocked this workstation from Admin Console.');
+        } else if (status && status.isLocked === true && !currentDevice.isLocked) {
+          setIsRemotelyUnlocked(false);
+          setCurrentDevice((prev) => ({ ...prev, isLocked: true, status: 'LOCKED' }));
+        }
+      } catch (e) {}
+    }, 4000);
+
+    return () => clearInterval(hbInterval);
+  }, [currentDevice.deviceId, currentDevice.isLocked]);
 
   // Auto-Sync Function with Admin Console
   const runFullSync = async () => {
@@ -565,18 +750,56 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       } else if (eventType === 'device_update') {
         if (data.id === currentDevice.id || data.deviceId === currentDevice.deviceId) {
           setCurrentDevice((prev) => ({ ...prev, ...data }));
+          if (data.isLocked === false && currentDevice.isLocked) {
+            handleRemoteUnlock('Administrator unlocked this device remotely.');
+          } else if (data.isLocked === true && !currentDevice.isLocked) {
+            setIsRemotelyUnlocked(false);
+            setViolationToast('🔒 Device Locked: Administrator has placed this device under remote security lockdown.');
+            setTimeout(() => setViolationToast(null), 4000);
+          }
         }
-      } else if (eventType === 'kiosk_exit_approved') {
-        if (data.deviceId === currentDevice.deviceId || data.deviceId === currentDevice.id) {
+      } else if (eventType === 'device_locked') {
+        const matchesDevice =
+          data.deviceId === currentDevice.deviceId ||
+          data.deviceId === currentDevice.id ||
+          data.id === currentDevice.id ||
+          data.id === currentDevice.deviceId;
+        if (matchesDevice) {
+          setIsRemotelyUnlocked(false);
+          setCurrentDevice((prev) => ({ ...prev, isLocked: true, status: 'LOCKED' }));
+          setViolationToast('🔒 Device Locked: Administrator placed this device under security lockdown.');
+          setTimeout(() => setViolationToast(null), 4000);
+        }
+      } else if (eventType === 'device_deleted') {
+        const matchesDevice =
+          data.deviceId === currentDevice.deviceId ||
+          data.deviceId === currentDevice.id ||
+          data.id === currentDevice.id ||
+          data.id === currentDevice.deviceId;
+        if (matchesDevice) {
+          handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.');
+        }
+      } else if (eventType === 'kiosk_exit_approved' || eventType === 'device_unlocked') {
+        const matchesDevice =
+          data.deviceId === currentDevice.deviceId ||
+          data.deviceId === currentDevice.id ||
+          data.id === currentDevice.id ||
+          data.id === currentDevice.deviceId ||
+          (exitRequestIdRef.current && (data.requestId === exitRequestIdRef.current || data.id === exitRequestIdRef.current));
+
+        if (matchesDevice) {
           setExitRequestStatus('APPROVED');
-          setTimeout(() => {
-            if (onExit) onExit();
-          }, 1500);
+          handleRemoteUnlock(data.reason || data.reviewNote || 'Administrator approved kiosk exit.');
         }
       } else if (eventType === 'kiosk_exit_rejected') {
-        if (data.deviceId === currentDevice.deviceId || data.deviceId === currentDevice.id) {
+        const matchesDevice =
+          data.deviceId === currentDevice.deviceId ||
+          data.deviceId === currentDevice.id ||
+          (exitRequestIdRef.current && (data.requestId === exitRequestIdRef.current || data.id === exitRequestIdRef.current));
+
+        if (matchesDevice) {
           setExitRequestStatus('REJECTED');
-          setExitRequestError(data.reason || 'Kiosk exit request was rejected by administrator.');
+          setExitRequestError(data.reason || data.reviewNote || 'Kiosk exit request was rejected by administrator.');
         }
       }
     });
@@ -594,16 +817,14 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         if (res) {
           if (res.status === 'APPROVED') {
             setExitRequestStatus('APPROVED');
-            setTimeout(() => {
-              if (onExit) onExit();
-            }, 1500);
+            handleRemoteUnlock(res.reviewNote || 'Administrator approved kiosk exit.');
           } else if (res.status === 'REJECTED') {
             setExitRequestStatus('REJECTED');
             setExitRequestError(res.reviewNote || 'Exit request was rejected by administrator.');
           }
         }
       } catch (e) {}
-    }, 2500);
+    }, 2000);
 
     return () => clearInterval(timer);
   }, [exitRequestStatus, currentDevice.deviceId, currentDevice.id, onExit]);
@@ -2217,6 +2438,65 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
             >
               Got It, Return to Student Kiosk
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Remote Kiosk Exit / Unlock Approved Modal */}
+      {isRemotelyUnlocked && (
+        <div className="fixed inset-0 z-[99999] bg-gray-950/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in zoom-in-95 duration-200">
+          <div className="bg-white text-gray-950 rounded-3xl p-8 max-w-lg w-full shadow-2xl border border-emerald-200 space-y-6 text-center">
+            <div className="w-16 h-16 rounded-3xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center mx-auto shadow-inner">
+              <Unlock className="w-8 h-8" />
+            </div>
+
+            <div className="space-y-2">
+              <span className="px-3 py-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold uppercase tracking-wider rounded-full">
+                Remote Unlock Signal Received
+              </span>
+              <h3 className="text-2xl font-bold text-gray-950">Workstation Unlocked</h3>
+              <p className="text-sm text-gray-600 leading-relaxed">
+                The Exam Section Administrator has remotely unlocked this PC and approved exit from Kiosk Mode.
+              </p>
+              {remoteUnlockReason && (
+                <div className="mt-2 p-3 bg-emerald-50/70 border border-emerald-100 rounded-xl text-xs text-emerald-900 font-medium">
+                  &ldquo;{remoteUnlockReason}&rdquo;
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 bg-gray-50 border border-gray-100 rounded-2xl text-left space-y-1 text-xs text-gray-500">
+              <div className="flex justify-between">
+                <span>Station ID:</span>
+                <span className="font-mono font-bold text-gray-800">{currentDevice.deviceId}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Admin Authority:</span>
+                <span className="font-semibold text-gray-800">ARVD Exam Section Admin</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Kiosk State:</span>
+                <span className="font-semibold text-emerald-600">Restored to Windows Desktop</span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <button
+                onClick={() => {
+                  try {
+                    window.close();
+                  } catch (e) {}
+                  if (onExit) onExit();
+                }}
+                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-lg shadow-emerald-600/20 text-sm flex items-center justify-center space-x-2 transition-all cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>Exit Kiosk & Return to Desktop</span>
+              </button>
+              <p className="text-[11px] text-gray-400">
+                Closing in a few moments automatically...
+              </p>
+            </div>
           </div>
         </div>
       )}

@@ -200,6 +200,20 @@ apiRouter.post('/students', (req: AuthenticatedRequest, res: Response) => {
 // -------------------------------------------------------------
 // 6. DEVICES & REMOTE CONTROLS
 // -------------------------------------------------------------
+// Temporarily track recently deleted devices (holds for 45s to allow running client watchdogs to receive exit signal)
+const recentlyDeletedDevices = new Map<string, number>();
+
+function isDeviceRecentlyDeleted(id: string): boolean {
+  const clean = String(id || '').trim().toLowerCase();
+  const ts = recentlyDeletedDevices.get(clean);
+  if (!ts) return false;
+  if (Date.now() - ts > 45000) {
+    recentlyDeletedDevices.delete(clean);
+    return false;
+  }
+  return true;
+}
+
 apiRouter.get('/devices', (req: AuthenticatedRequest, res: Response) => {
   return sendSuccess(res, db.devices);
 });
@@ -377,6 +391,219 @@ apiRouter.get('/devices/:id', (req: AuthenticatedRequest, res: Response) => {
   return sendSuccess(res, device);
 });
 
+apiRouter.delete('/devices/:id', (req: AuthenticatedRequest, res: Response) => {
+  const targetId = req.params.id;
+  const cleanTargetId = String(targetId).trim().toLowerCase();
+  const index = db.devices.findIndex(
+    (d) =>
+      d.id === targetId ||
+      d.deviceId === targetId ||
+      d.id.toLowerCase() === cleanTargetId ||
+      d.deviceId.toLowerCase() === cleanTargetId
+  );
+
+  if (index === -1) {
+    return sendError(res, 404, 'DEVICE_NOT_FOUND', `Device ${targetId} not found in fleet inventory.`);
+  }
+
+  const [deletedDevice] = db.devices.splice(index, 1);
+  recentlyDeletedDevices.set(deletedDevice.id.toLowerCase(), Date.now());
+  recentlyDeletedDevices.set(deletedDevice.deviceId.toLowerCase(), Date.now());
+
+  // Clean up any exit requests for this device
+  db.kioskExitRequests = db.kioskExitRequests.filter(
+    (r) =>
+      r.deviceId !== deletedDevice.deviceId &&
+      r.deviceId !== deletedDevice.id &&
+      (r as any).id !== deletedDevice.id
+  );
+
+  // Unlink student assigned to this device
+  const student = db.students.find(
+    (s) => s.deviceId === deletedDevice.id || s.deviceId === deletedDevice.deviceId
+  );
+  if (student) {
+    student.deviceId = undefined;
+    student.deviceName = undefined;
+  }
+
+  // Decrement counters
+  const targetSchool = db.schools.find((s) => s.id === deletedDevice.schoolId);
+  if (targetSchool && targetSchool.totalDevices > 0) targetSchool.totalDevices -= 1;
+  const targetClass = db.classes.find((c) => c.id === deletedDevice.classId);
+  if (targetClass && targetClass.deviceCount > 0) targetClass.deviceCount -= 1;
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Admin',
+    adminRole: req.user?.role || 'SCHOOL_ADMIN',
+    schoolId: deletedDevice.schoolId,
+    action: 'DELETE_DEVICE',
+    targetType: 'DEVICE',
+    targetId: deletedDevice.id,
+    targetDescription: `Deleted and unenrolled ${deletedDevice.platform} "${deletedDevice.name}" (${deletedDevice.deviceId}) from fleet inventory.`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  // Broadcast device deletion to admin console and any active kiosk clients
+  db.broadcast('device_deleted', {
+    id: deletedDevice.id,
+    deviceId: deletedDevice.deviceId,
+    name: deletedDevice.name,
+    platform: deletedDevice.platform,
+  });
+  // Also broadcast unlocked event so client disengages kiosk mode
+  db.broadcast('device_unlocked', {
+    deviceId: deletedDevice.deviceId,
+    id: deletedDevice.id,
+    reason: 'Device unenrolled and deleted by administrator.',
+  });
+
+  return sendSuccess(res, {
+    deletedDeviceId: deletedDevice.deviceId,
+    deletedId: deletedDevice.id,
+    name: deletedDevice.name,
+  }, `Device ${deletedDevice.name} (${deletedDevice.deviceId}) deleted and unenrolled successfully.`);
+});
+
+apiRouter.post('/devices/checkin', (req: AuthenticatedRequest, res: Response) => {
+  const {
+    deviceId,
+    name,
+    model,
+    manufacturer,
+    platform,
+    osVersion,
+    batteryLevel,
+    isCharging,
+    isLocked,
+    currentApp,
+    studentName,
+    studentRoll,
+    classId,
+    schoolId,
+    wifiSsid,
+  } = req.body;
+
+  if (!deviceId) {
+    return sendError(res, 400, 'VALIDATION_ERROR', 'deviceId is required for check-in.');
+  }
+
+  const cleanDeviceId = String(deviceId).trim().toLowerCase();
+
+  // If device was recently deleted by admin, notify client unless forceEnroll is requested
+  if (!req.body.forceEnroll && isDeviceRecentlyDeleted(cleanDeviceId)) {
+    return res.json({
+      success: false,
+      isDeleted: true,
+      error: 'DEVICE_DELETED',
+      message: 'This device has been unenrolled and deleted by the administrator.',
+    });
+  }
+
+  // Extract client IP address accurately from request headers
+  const forwarded = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim();
+  const realIp = (req.headers['x-real-ip'] as string)?.trim();
+  const rawIp = req.body.ipAddress || forwarded || realIp || req.socket.remoteAddress || req.ip || '127.0.0.1';
+  const cleanIp = String(rawIp).replace(/^.*:/, '').trim() || '127.0.0.1';
+
+  let device = db.devices.find(
+    (d) =>
+      d.deviceId === deviceId ||
+      d.id === deviceId ||
+      d.deviceId.toLowerCase() === cleanDeviceId ||
+      d.id.toLowerCase() === cleanDeviceId
+  );
+
+  if (device) {
+    // Update live telemetry & read IP address
+    device.ipAddress = cleanIp;
+    device.lastHeartbeat = new Date().toISOString();
+    if (batteryLevel !== undefined) device.batteryLevel = batteryLevel;
+    if (isCharging !== undefined) device.isCharging = isCharging;
+    if (currentApp) device.currentActiveApp = currentApp;
+    if (wifiSsid) device.wifiSsid = wifiSsid;
+    if (platform && (!device.platform || (device.platform as string) === 'UNKNOWN')) device.platform = platform;
+    if (model && (!device.model || device.model === 'Unknown')) device.model = model;
+    device.status = device.isLocked ? 'LOCKED' : 'ONLINE';
+
+    db.broadcast('device_update', device);
+    return sendSuccess(res, {
+      acknowledged: true,
+      device,
+      isLocked: device.isLocked,
+      isDeleted: false,
+    });
+  }
+
+  // Auto-enroll new device (PC, Tablet, Mobile) into fleet inventory
+  const detectedPlatform = platform || 'WINDOWS_PC';
+  const targetSchool = db.schools.find((s) => s.id === schoolId) || db.schools[0];
+  const targetClass = db.classes.find((c) => c.id === classId) || db.classes[0];
+  const targetPolicy = db.policies.find((p) => p.id === targetClass.assignedPolicyId) || db.policies[0];
+
+  const rollNumber = studentRoll || `ST-${String(deviceId).slice(-4)}`;
+  const assignedName = studentName || `Station User (${deviceId})`;
+
+  const newDevice: Device = {
+    id: `dev-${cleanDeviceId.replace(/[^a-z0-9-]/g, '-')}`,
+    deviceId: deviceId,
+    serialNumber: `SN-${deviceId.toUpperCase()}`,
+    name: name || (detectedPlatform === 'WINDOWS_PC' ? `Windows Station (${deviceId})` : `Mobile Device (${deviceId})`),
+    model: model || (detectedPlatform === 'WINDOWS_PC' ? 'Windows 11 PC (x64)' : 'EduGuard Mobile / Tablet'),
+    manufacturer: manufacturer || (detectedPlatform === 'WINDOWS_PC' ? 'EduGuard Windows Client' : 'EduGuard OEM'),
+    platform: detectedPlatform as any,
+    osVersion: osVersion || (detectedPlatform === 'WINDOWS_PC' ? 'Windows 11 Pro' : 'Android 15'),
+    agentVersion: '2.4.0',
+    managementMode: 'DEVICE_OWNER',
+    status: isLocked ? 'LOCKED' : 'ONLINE',
+    isLocked: isLocked !== undefined ? isLocked : false,
+    schoolId: targetSchool.id,
+    schoolName: targetSchool.name,
+    classId: targetClass.id,
+    className: targetClass.name,
+    assignedStudentName: assignedName,
+    assignedStudentRoll: rollNumber,
+    batteryLevel: batteryLevel ?? 100,
+    isCharging: isCharging ?? true,
+    networkType: 'WIFI',
+    wifiSsid: wifiSsid || 'Campus-Secure-WLAN',
+    ipAddress: cleanIp,
+    storageTotalGb: 256,
+    storageUsedGb: 34.2,
+    ramTotalGb: 16,
+    ramUsedGb: 3.6,
+    policyId: targetPolicy.id,
+    policyVersion: targetPolicy.version,
+    policySyncedAt: new Date().toISOString(),
+    lastHeartbeat: new Date().toISOString(),
+    currentActiveApp: currentApp || 'EduGuard Kiosk Engine',
+    kioskMode: 'FULL_LOCKDOWN',
+    enrollmentDate: new Date().toISOString(),
+    hardwareSecurity: {
+      playIntegrityPass: true,
+      deviceRooted: false,
+      developerOptionsDisabled: true,
+      usbDebuggingDisabled: true,
+    },
+  };
+
+  db.devices.unshift(newDevice);
+  targetClass.deviceCount += 1;
+  targetSchool.totalDevices += 1;
+
+  db.broadcast('device_enrolled', { device: newDevice });
+  db.broadcast('device_update', newDevice);
+
+  return sendSuccess(res, {
+    acknowledged: true,
+    device: newDevice,
+    isLocked: newDevice.isLocked,
+    isDeleted: false,
+  }, `Device ${newDevice.deviceId} registered with IP ${cleanIp}.`);
+});
+
 apiRouter.post('/devices/:id/lock', (req: AuthenticatedRequest, res: Response) => {
   const device = db.devices.find((d) => d.id === req.params.id || d.deviceId === req.params.id);
   if (!device) {
@@ -419,10 +646,52 @@ apiRouter.post('/devices/:id/lock', (req: AuthenticatedRequest, res: Response) =
     status: 'SUCCESS',
   });
 
+  db.broadcast('device_locked', {
+    deviceId: device.deviceId,
+    id: device.id,
+    reason: device.lockReason,
+  });
   db.broadcast('device_update', device);
   db.broadcast('command_update', cmd);
 
   return sendSuccess(res, { device, command: cmd }, 'Device lock command executed.');
+});
+
+apiRouter.get('/devices/:id/kiosk-status', (req: AuthenticatedRequest, res: Response) => {
+  const cleanId = String(req.params.id || '').trim().toLowerCase();
+  const wasDeleted = isDeviceRecentlyDeleted(cleanId);
+  const device = db.devices.find(
+    (d) =>
+      d.id === req.params.id ||
+      d.deviceId === req.params.id ||
+      d.id.toLowerCase() === cleanId ||
+      d.deviceId.toLowerCase() === cleanId
+  );
+
+  if (!device) {
+    return res.json({
+      success: true,
+      data: {
+        deviceId: req.params.id,
+        isLocked: false,
+        kioskActive: false,
+        isDeleted: wasDeleted,
+        status: 'UNENROLLED',
+      },
+    });
+  }
+  return res.json({
+    success: true,
+    data: {
+      id: device.id,
+      deviceId: device.deviceId,
+      isLocked: !!device.isLocked,
+      kioskActive: !!device.isLocked,
+      status: device.status,
+      kioskMode: device.kioskMode,
+      lastHeartbeat: device.lastHeartbeat,
+    },
+  });
 });
 
 apiRouter.post('/devices/:id/unlock', (req: AuthenticatedRequest, res: Response) => {
@@ -460,15 +729,70 @@ apiRouter.post('/devices/:id/unlock', (req: AuthenticatedRequest, res: Response)
     action: 'UNLOCK_DEVICE',
     targetType: 'DEVICE',
     targetId: device.id,
-    targetDescription: `Remotely unlocked ${device.name} (${device.deviceId}).`,
+    targetDescription: `Remotely unlocked and exited kiosk on ${device.name} (${device.deviceId}).`,
     ipAddress: req.ip || '127.0.0.1',
     status: 'SUCCESS',
   });
 
+  // Broadcast real-time exit and unlock events to student workstation
+  db.broadcast('kiosk_exit_approved', {
+    deviceId: device.deviceId,
+    id: device.id,
+    studentName: device.assignedStudentName,
+    reason: 'Administrator remotely unlocked workstation and exited Kiosk mode.',
+    timestamp: new Date().toISOString(),
+  });
+  db.broadcast('device_unlocked', {
+    deviceId: device.deviceId,
+    id: device.id,
+    studentName: device.assignedStudentName,
+    reason: 'Administrator remotely unlocked workstation and exited Kiosk mode.',
+  });
   db.broadcast('device_update', device);
   db.broadcast('command_update', cmd);
 
-  return sendSuccess(res, { device, command: cmd }, 'Device unlocked.');
+  return sendSuccess(res, { device, command: cmd }, 'Device unlocked and kiosk exited.');
+});
+
+apiRouter.post('/devices/:id/exit-kiosk', (req: AuthenticatedRequest, res: Response) => {
+  const device = db.devices.find((d) => d.id === req.params.id || d.deviceId === req.params.id);
+  if (!device) {
+    return sendError(res, 404, 'DEVICE_NOT_FOUND', 'Device not found.');
+  }
+
+  device.isLocked = false;
+  device.status = 'ONLINE';
+  device.lockReason = undefined;
+
+  db.broadcast('kiosk_exit_approved', {
+    deviceId: device.deviceId,
+    id: device.id,
+    studentName: device.assignedStudentName,
+    reason: 'Administrator remotely unlocked workstation and exited Kiosk mode.',
+    timestamp: new Date().toISOString(),
+  });
+  db.broadcast('device_unlocked', {
+    deviceId: device.deviceId,
+    id: device.id,
+    studentName: device.assignedStudentName,
+    reason: 'Administrator remotely unlocked workstation and exited Kiosk mode.',
+  });
+  db.broadcast('device_update', device);
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Admin',
+    adminRole: req.user?.role || 'SCHOOL_ADMIN',
+    schoolId: device.schoolId,
+    action: 'UNLOCK_DEVICE',
+    targetType: 'DEVICE',
+    targetId: device.id,
+    targetDescription: `Remotely exited kiosk on ${device.name} (${device.deviceId}).`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  return sendSuccess(res, { device }, 'Workstation kiosk exited successfully.');
 });
 
 apiRouter.post('/devices/:id/sync', (req: AuthenticatedRequest, res: Response) => {
@@ -972,18 +1296,36 @@ apiRouter.get('/events/stream', (req: AuthenticatedRequest, res: Response) => {
 // to post live telemetry, report violations, and simulate battery/app changes.
 // -------------------------------------------------------------
 apiRouter.post('/simulator/heartbeat', (req: AuthenticatedRequest, res: Response) => {
-  const { deviceId, batteryLevel, isCharging, currentApp, isLocked } = req.body;
-  const device = db.devices.find((d) => d.id === deviceId || d.deviceId === deviceId);
+  const { deviceId, batteryLevel, isCharging, currentApp, isLocked, ipAddress } = req.body;
+  const cleanDeviceId = String(deviceId || '').trim().toLowerCase();
+
+  if (isDeviceRecentlyDeleted(cleanDeviceId)) {
+    return res.json({
+      success: false,
+      isDeleted: true,
+      error: 'DEVICE_DELETED',
+      message: 'This device has been deleted by administrator.',
+    });
+  }
+
+  // Extract client IP address accurately from request headers
+  const forwarded = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim();
+  const realIp = (req.headers['x-real-ip'] as string)?.trim();
+  const rawIp = ipAddress || forwarded || realIp || req.socket.remoteAddress || req.ip || '127.0.0.1';
+  const cleanIp = String(rawIp).replace(/^.*:/, '').trim() || '127.0.0.1';
+
+  const device = db.devices.find((d) => d.id === deviceId || d.deviceId === deviceId || d.deviceId.toLowerCase() === cleanDeviceId || d.id.toLowerCase() === cleanDeviceId);
   if (device) {
     if (batteryLevel !== undefined) device.batteryLevel = batteryLevel;
     if (isCharging !== undefined) device.isCharging = isCharging;
     if (currentApp !== undefined) device.currentActiveApp = currentApp;
     if (isLocked !== undefined) device.isLocked = isLocked;
+    device.ipAddress = cleanIp;
     device.lastHeartbeat = new Date().toISOString();
     device.status = device.isLocked ? 'LOCKED' : 'ONLINE';
     db.broadcast('device_update', device);
   }
-  return sendSuccess(res, { acknowledged: true, device });
+  return sendSuccess(res, { acknowledged: true, device, isDeleted: false });
 });
 
 apiRouter.post('/simulator/violation', (req: AuthenticatedRequest, res: Response) => {
@@ -1228,8 +1570,14 @@ apiRouter.get('/kiosk-exit-requests', (req: AuthenticatedRequest, res: Response)
 
 apiRouter.get('/kiosk-exit-requests/status/:deviceId', (req: AuthenticatedRequest, res: Response) => {
   const deviceId = req.params.deviceId;
-  // Return the latest request for this device
-  const latest = db.kioskExitRequests.find((r) => r.deviceId === deviceId);
+  // Return the latest request for this device (case-insensitive and matching id or deviceId)
+  const cleanId = String(deviceId).trim().toLowerCase();
+  const latest = db.kioskExitRequests.find(
+    (r) =>
+      r.deviceId === deviceId ||
+      r.deviceId.toLowerCase() === cleanId ||
+      (r as any).id === deviceId
+  );
   return sendSuccess(res, latest || null);
 });
 
@@ -1241,19 +1589,31 @@ apiRouter.post('/kiosk-exit-requests', (req: AuthenticatedRequest, res: Response
   }
 
   // Validate student password (allow standard student password e.g. student123, student roll, or any non-empty password)
-  const cleanPass = String(studentPassword).trim().toLowerCase();
-  const isValid = cleanPass.length >= 4;
+  const cleanPass = String(studentPassword).trim();
+  const isValid = cleanPass.length >= 1;
 
   if (!isValid) {
-    return sendError(res, 401, 'INVALID_PASSWORD', 'Invalid student credentials or password is too short.');
+    return sendError(res, 400, 'INVALID_PASSWORD', 'Please enter your student password.');
   }
 
-  const device = db.devices.find((d) => d.id === deviceId || d.deviceId === deviceId);
+  const device = db.devices.find(
+    (d) =>
+      d.id === deviceId ||
+      d.deviceId === deviceId ||
+      d.id.toLowerCase() === deviceId.toLowerCase() ||
+      d.deviceId.toLowerCase() === deviceId.toLowerCase()
+  );
   const student = db.students.find((s) => s.id === studentId || s.name === studentName);
 
   // Remove any existing pending request for this device
   db.kioskExitRequests = db.kioskExitRequests.filter(
-    (r) => !(r.deviceId === deviceId && r.status === 'PENDING')
+    (r) =>
+      !(
+        (r.deviceId === deviceId ||
+          r.deviceId.toLowerCase() === deviceId.toLowerCase() ||
+          (device && r.deviceId === device.deviceId)) &&
+        r.status === 'PENDING'
+      )
   );
 
   const newRequest = {
@@ -1305,12 +1665,87 @@ apiRouter.post('/kiosk-exit-requests/:id/approve', (req: AuthenticatedRequest, r
   request.reviewedAt = new Date().toISOString();
   request.reviewNote = req.body.note || 'Approved by Administrator';
 
-  db.broadcast('kiosk_exit_approved', {
+  // 1. Locate and unlock the corresponding device in db.devices
+  let device = db.devices.find(
+    (d) =>
+      d.id === request.deviceId ||
+      d.deviceId === request.deviceId ||
+      d.id.toLowerCase() === request.deviceId.toLowerCase() ||
+      d.deviceId.toLowerCase() === request.deviceId.toLowerCase()
+  );
+
+  if (device) {
+    device.isLocked = false;
+    device.status = 'ONLINE';
+    device.lockReason = undefined;
+    device.lastHeartbeat = new Date().toISOString();
+  } else {
+    // If not found in registry, ensure it exists with isLocked: false so status endpoints return unlocked
+    device = {
+      id: `dev-${request.deviceId.toLowerCase()}`,
+      deviceId: request.deviceId,
+      serialNumber: `SN-${request.deviceId}`,
+      name: request.deviceName || `Workstation ${request.deviceId}`,
+      model: 'Windows 11 PC (x64)',
+      manufacturer: 'EduGuard Windows Client',
+      platform: (request.platform as any) || 'WINDOWS_PC',
+      osVersion: 'Windows 11 Pro (23H2/24H2)',
+      agentVersion: '2.4.0',
+      managementMode: 'DEVICE_OWNER',
+      status: 'ONLINE',
+      isLocked: false,
+      schoolId: request.schoolId || 'sch-demo-01',
+      schoolName: request.schoolName || 'Demo Examination Center',
+      classId: 'cls-12-a',
+      className: request.className || 'Class XII-A',
+      assignedStudentName: request.studentName,
+      assignedStudentRoll: request.studentRoll || 'PC-01',
+      batteryLevel: 100,
+      isCharging: true,
+      networkType: 'WIFI',
+      wifiSsid: 'Campus-Secure-5G',
+      ipAddress: '127.0.0.1',
+      storageTotalGb: 256,
+      storageUsedGb: 34.2,
+      ramTotalGb: 16,
+      ramUsedGb: 3.2,
+      policyId: 'pol-exam-lockdown',
+      policyVersion: 2,
+      policySyncedAt: new Date().toISOString(),
+      lastHeartbeat: new Date().toISOString(),
+      currentActiveApp: 'Windows Desktop',
+      kioskMode: 'FULL_LOCKDOWN',
+      enrollmentDate: new Date().toISOString(),
+      hardwareSecurity: {
+        playIntegrityPass: true,
+        deviceRooted: false,
+        developerOptionsDisabled: true,
+        usbDebuggingDisabled: true,
+      },
+    };
+    db.devices.unshift(device);
+  }
+
+  // 2. Broadcast the approved exit request event with complete object payload
+  const approvalPayload = {
+    ...request,
+    id: request.id,
     requestId: request.id,
     deviceId: request.deviceId,
     studentName: request.studentName,
     approvedBy: request.reviewedBy,
+    reason: request.reviewNote,
     timestamp: request.reviewedAt,
+  };
+  db.broadcast('kiosk_exit_approved', approvalPayload);
+
+  // 3. Broadcast device unlocked event and device update
+  db.broadcast('device_update', device);
+  db.broadcast('device_unlocked', {
+    deviceId: device.deviceId,
+    id: device.id,
+    studentName: device.assignedStudentName,
+    reason: request.reviewNote,
   });
 
   db.addAuditLog({
@@ -1321,7 +1756,7 @@ apiRouter.post('/kiosk-exit-requests/:id/approve', (req: AuthenticatedRequest, r
     action: 'KIOSK_EXIT_APPROVED',
     targetType: 'DEVICE',
     targetId: request.deviceId,
-    targetDescription: `Administrator ${req.user?.name || 'Admin'} APPROVED Kiosk exit for student ${request.studentName} (${request.studentRoll}) on ${request.deviceName}.`,
+    targetDescription: `Administrator ${req.user?.name || 'Admin'} APPROVED Kiosk exit for student ${request.studentName} (${request.studentRoll}) on ${request.deviceName}. Workstation unlocked.`,
     ipAddress: req.ip || '127.0.0.1',
     status: 'SUCCESS',
   });
@@ -1342,14 +1777,17 @@ apiRouter.post('/kiosk-exit-requests/:id/reject', (req: AuthenticatedRequest, re
   request.reviewedAt = new Date().toISOString();
   request.reviewNote = req.body.reason || 'Rejected by Administrator: Please continue exam/class session';
 
-  db.broadcast('kiosk_exit_rejected', {
+  const rejectPayload = {
+    ...request,
+    id: request.id,
     requestId: request.id,
     deviceId: request.deviceId,
     studentName: request.studentName,
     rejectedBy: request.reviewedBy,
     reason: request.reviewNote,
     timestamp: request.reviewedAt,
-  });
+  };
+  db.broadcast('kiosk_exit_rejected', rejectPayload);
 
   db.addAuditLog({
     adminId: req.user?.id || 'usr-super-arvd',
@@ -1365,6 +1803,76 @@ apiRouter.post('/kiosk-exit-requests/:id/reject', (req: AuthenticatedRequest, re
   });
 
   return sendSuccess(res, request, 'Kiosk exit request rejected.');
+});
+
+// -------------------------------------------------------------
+// 19. WINDOWS KIOSK DOWNLOADS & INSTALLERS
+// -------------------------------------------------------------
+apiRouter.get('/downloads/Stop-EduGuard-Kiosk.bat', (req, res) => {
+  const content = `@echo off\r
+title EduGuard MDM - Emergency Kiosk Stopper\r
+color 0C\r
+echo ====================================================================\r
+echo  EduGuard MDM - Emergency Kiosk Stopper & Process Cleanup\r
+echo ====================================================================\r
+echo [*] Terminating EduGuard-Student-Kiosk watchdog processes...\r
+taskkill /f /im EduGuard-Student-Kiosk.exe >nul 2>&1\r
+taskkill /f /im EduGuard-Student-Kiosk.bat >nul 2>&1\r
+taskkill /f /im Launch-EduGuard-Watchdog.bat >nul 2>&1\r
+taskkill /f /im cmd.exe /fi "WINDOWTITLE eq EduGuard MDM*" >nul 2>&1\r
+echo [*] Terminating Kiosk Edge browser instances...\r
+taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
+echo.\r
+echo [SUCCESS] EduGuard Kiosk processes stopped. Your PC is unlocked!\r
+echo ====================================================================\r
+pause\r
+`;
+  res.setHeader('Content-Disposition', 'attachment; filename="Stop-EduGuard-Kiosk.bat"');
+  res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
+  res.send(content);
+});
+
+apiRouter.get('/downloads/Launch-EduGuard-Watchdog.bat', (req, res) => {
+  const host = req.get('host') || 'localhost:3000';
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const targetUrl = req.query.url ? String(req.query.url) : `${protocol}://${host}?student=true`;
+
+  const content = `@echo off\r
+setlocal enabledelayedexpansion\r
+title EduGuard MDM - Windows Secure Student Kiosk Active\r
+color 0B\r
+echo ====================================================================\r
+echo  EduGuard MDM - Windows 10/11 Secure Student Kiosk Active\r
+echo ====================================================================\r
+echo [*] Kiosk Target: ${targetUrl}\r
+echo [*] Watchdog: Active (Ensures kiosk remains full-screen)\r
+echo [*] Single-Instance & Rapid Reload Protection: Enabled\r
+echo ====================================================================\r
+\r
+set "DATA_DIR=%LOCALAPPDATA%\\EduGuardKiosk\\BrowserProfile"\r
+if not exist "%DATA_DIR%" mkdir "%DATA_DIR%" >nul 2>&1\r
+\r
+set "BROWSER_EXE="\r
+if exist "%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe" set "BROWSER_EXE=%ProgramFiles(x86)%\\Microsoft\\Edge\\Application\\msedge.exe"\r
+if not defined BROWSER_EXE if exist "%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe" set "BROWSER_EXE=%ProgramFiles%\\Microsoft\\Edge\\Application\\msedge.exe"\r
+if not defined BROWSER_EXE if exist "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe" set "BROWSER_EXE=%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe"\r
+if not defined BROWSER_EXE if exist "%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe" set "BROWSER_EXE=%ProgramFiles(x86)%\\Google\\Chrome\\Application\\chrome.exe"\r
+if not defined BROWSER_EXE set "BROWSER_EXE=msedge.exe"\r
+\r
+echo [*] Using Browser: !BROWSER_EXE!\r
+echo.\r
+\r
+:KIOSK_LOOP\r
+echo [%time%] Starting EduGuard Student Kiosk...\r
+"!BROWSER_EXE!" --kiosk "${targetUrl}" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
+\r
+echo [%time%] Kiosk window closed. Re-launching in 3 seconds...\r
+timeout /t 3 /nobreak >nul\r
+goto KIOSK_LOOP\r
+`;
+  res.setHeader('Content-Disposition', 'attachment; filename="Launch-EduGuard-Watchdog.bat"');
+  res.setHeader('Content-Type', 'application/x-bat; charset=utf-8');
+  res.send(content);
 });
 
 

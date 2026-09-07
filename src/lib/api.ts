@@ -114,6 +114,12 @@ export const api = {
     fetchJson<{ device: Device; command: RemoteCommand }>(`/devices/${id}/unlock`, {
       method: 'POST',
     }),
+  exitKiosk: async (id: string) =>
+    fetchJson<{ device: Device }>(`/devices/${id}/exit-kiosk`, {
+      method: 'POST',
+    }),
+  getKioskStatus: async (id: string) =>
+    fetchJson<{ isLocked: boolean; kioskActive: boolean; status: string; kioskMode?: string; isDeleted?: boolean }>(`/devices/${id}/kiosk-status`),
   syncDevicePolicy: async (id: string) =>
     fetchJson<{ device: Device; command: RemoteCommand }>(`/devices/${id}/sync`, {
       method: 'POST',
@@ -121,6 +127,32 @@ export const api = {
   rebootDevice: async (id: string) =>
     fetchJson<{ command: RemoteCommand }>(`/devices/${id}/reboot`, {
       method: 'POST',
+    }),
+  deleteDevice: async (id: string) =>
+    fetchJson<{ deletedDeviceId: string; deletedId: string; name: string }>(`/devices/${id}`, {
+      method: 'DELETE',
+    }),
+  checkinDevice: async (data: {
+    deviceId: string;
+    name?: string;
+    model?: string;
+    manufacturer?: string;
+    platform?: string;
+    osVersion?: string;
+    batteryLevel?: number;
+    isCharging?: boolean;
+    isLocked?: boolean;
+    currentApp?: string;
+    studentName?: string;
+    studentRoll?: string;
+    classId?: string;
+    schoolId?: string;
+    wifiSsid?: string;
+    ipAddress?: string;
+  }) =>
+    fetchJson<{ acknowledged: boolean; device: Device; isLocked: boolean; isDeleted?: boolean }>('/devices/checkin', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 
   // Policies
@@ -219,7 +251,7 @@ export const api = {
 
   // Simulator Bridge
   simulatorHeartbeat: async (payload: any) =>
-    fetchJson<{ acknowledged: boolean; device?: Device }>('/simulator/heartbeat', {
+    fetchJson<{ acknowledged: boolean; device?: Device; isDeleted?: boolean; isLocked?: boolean }>('/simulator/heartbeat', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -276,7 +308,10 @@ export function subscribeToMdmEvents(onEvent: (eventType: string, data: any) => 
 
   const eventTypes = [
     'device_update',
+    'device_locked',
+    'device_unlocked',
     'device_enrolled',
+    'device_deleted',
     'student_created',
     'class_updated',
     'command_update',

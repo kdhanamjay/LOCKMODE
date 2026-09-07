@@ -14,6 +14,8 @@ import {
   Wifi,
   CheckCircle2,
   Info,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { Device, Application, DevicePolicy, AppUsageRecord, PolicyViolation } from '../types/mdm';
 
@@ -24,6 +26,7 @@ interface DeviceDetailModalProps {
   onUnlock: (deviceId: string) => void;
   onSync: (deviceId: string) => void;
   onReboot: (deviceId: string) => void;
+  onDelete?: (deviceId: string) => void;
   policies: DevicePolicy[];
   applications: Application[];
   usageRecords: AppUsageRecord[];
@@ -39,6 +42,7 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
   onUnlock,
   onSync,
   onReboot,
+  onDelete,
   policies,
   applications,
   usageRecords,
@@ -47,6 +51,7 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
   if (!device) return null;
 
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const activePolicy = policies.find((p) => p.id === device.policyId) || policies[0];
   const deviceUsage = usageRecords.filter((u) => u.deviceId === device.id);
   const deviceViolations = violations.filter((v) => v.deviceId === device.id);
@@ -89,10 +94,11 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
             {device.isLocked ? (
               <button
                 onClick={() => onUnlock(device.id)}
-                className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-all"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-all cursor-pointer"
+                title="Remotely Exit Kiosk & Unlock PC"
               >
                 <Unlock className="w-3.5 h-3.5" />
-                <span>Unlock Device</span>
+                <span>Exit Kiosk / Unlock PC</span>
               </button>
             ) : (
               <button
@@ -119,6 +125,16 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
+
+            {onDelete && (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="p-2 bg-white hover:bg-rose-50 text-gray-400 hover:text-rose-600 rounded-lg border border-gray-200 hover:border-rose-200 transition-colors shadow-xs cursor-pointer"
+                title="Delete & Unenroll Device"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            )}
 
             <button
               onClick={onClose}
@@ -419,6 +435,51 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
             </div>
           )}
         </div>
+
+        {/* Delete Confirmation Dialog */}
+        {showDeleteConfirm && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-gray-950/50 backdrop-blur-xs select-none">
+            <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-gray-100 space-y-4">
+              <div className="flex items-center space-x-2.5 text-rose-600">
+                <div className="w-9 h-9 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-gray-950 text-sm">Delete & Unenroll</h4>
+                  <p className="text-[11px] text-gray-500">Fleet Inventory Removal</p>
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-600 leading-relaxed">
+                Are you sure you want to delete <span className="font-semibold text-gray-900">{device.name}</span> ({device.deviceId})? The device will be unenrolled and any active kiosk lock will be dismissed.
+              </p>
+
+              <div className="flex items-center justify-end space-x-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="px-3.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onDelete) {
+                      onDelete(device.id);
+                      setShowDeleteConfirm(false);
+                      onClose();
+                    }
+                  }}
+                  className="px-3.5 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs transition-colors flex items-center space-x-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete Device</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

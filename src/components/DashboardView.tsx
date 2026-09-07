@@ -5,6 +5,7 @@ import {
   Smartphone,
   CheckCircle2,
   Lock,
+  LockOpen,
   ShieldAlert,
   Radio,
   ArrowRight,
@@ -25,6 +26,8 @@ interface DashboardViewProps {
   onOpenDeviceDetail: (device: Device) => void;
   onQuickLock: (deviceId: string) => void;
   onQuickUnlock: (deviceId: string) => void;
+  pendingExitRequestsCount?: number;
+  onOpenExitRequestsModal?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -33,6 +36,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   violations,
   onSelectSection,
   onOpenDeviceDetail,
+  pendingExitRequestsCount = 0,
+  onOpenExitRequestsModal,
 }) => {
   const onlinePercentage = Math.round((stats.onlineDevices / (stats.totalDevices || 1)) * 100);
 
@@ -45,6 +50,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <h1 className="text-3xl sm:text-4xl font-light tracking-tight text-gray-950">System Overview</h1>
         </div>
         <div className="flex items-center gap-2.5">
+          {onOpenExitRequestsModal && (
+            <button
+              onClick={onOpenExitRequestsModal}
+              className={`px-4 py-2 rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer ${
+                pendingExitRequestsCount > 0
+                  ? 'bg-amber-500 text-white hover:bg-amber-600 animate-pulse'
+                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+              }`}
+            >
+              <LockOpen className="w-3.5 h-3.5" />
+              <span>Exit Approvals {pendingExitRequestsCount > 0 ? `(${pendingExitRequestsCount})` : ''}</span>
+            </button>
+          )}
           <button
             onClick={() => onSelectSection('enrollment')}
             className="px-4 py-2 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-700 shadow-xs hover:bg-gray-50 transition-all flex items-center space-x-1.5"
@@ -61,6 +79,39 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Pending Kiosk Exit Requests Banner */}
+      {pendingExitRequestsCount > 0 && (
+        <div className="bg-amber-50/80 p-6 rounded-3xl border border-amber-200 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 animate-in fade-in duration-200">
+          <div className="flex items-center space-x-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center font-bold text-sm shrink-0 shadow-sm animate-pulse">
+              <LockOpen className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h4 className="text-sm font-bold text-gray-950">
+                  {pendingExitRequestsCount} Student Workstation Exit Request{pendingExitRequestsCount > 1 ? 's' : ''} Awaiting Approval
+                </h4>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500 text-white animate-pulse">
+                  PENDING
+                </span>
+              </div>
+              <p className="text-xs text-amber-900/80 font-medium mt-0.5">
+                Students have entered their passwords and submitted exit requests to unlock their PC kiosks.
+              </p>
+            </div>
+          </div>
+          {onOpenExitRequestsModal && (
+            <button
+              onClick={onOpenExitRequestsModal}
+              className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-sm flex items-center space-x-1.5 shrink-0 cursor-pointer"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Review & Approve ({pendingExitRequestsCount})</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Critical Violation Alert */}
       {stats.policyViolationsCount.critical > 0 && (

@@ -17,6 +17,7 @@ import {
   LogOut,
   Megaphone,
   BookOpen,
+  LockOpen,
 } from 'lucide-react';
 import { AdminUser } from '../types/mdm';
 
@@ -48,6 +49,8 @@ interface SidebarProps {
   onToggleSimulator: () => void;
   onLaunchStudentWorkspace?: () => void;
   onLogout?: () => void;
+  pendingExitRequestsCount?: number;
+  onOpenExitRequestsModal?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -62,6 +65,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleSimulator,
   onLaunchStudentWorkspace,
   onLogout,
+  pendingExitRequestsCount = 0,
+  onOpenExitRequestsModal,
 }) => {
   const navItems = [
     { id: 'dashboard' as NavSection, label: 'Overview', icon: LayoutDashboard },
@@ -130,6 +135,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-2 mb-3">
           Management
         </div>
+
+        {onOpenExitRequestsModal && (
+          <button
+            onClick={onOpenExitRequestsModal}
+            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium transition-all mb-1 cursor-pointer ${
+              pendingExitRequestsCount > 0
+                ? 'bg-amber-50 text-amber-900 border border-amber-300 font-bold shadow-xs'
+                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-950'
+            }`}
+          >
+            <div className="flex items-center space-x-2.5">
+              <LockOpen className={`w-4 h-4 ${pendingExitRequestsCount > 0 ? 'text-amber-600 animate-pulse' : 'text-gray-400'}`} />
+              <span className="truncate">Exit Approvals</span>
+            </div>
+            {pendingExitRequestsCount > 0 ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-black bg-amber-500 text-white animate-pulse">
+                {pendingExitRequestsCount} PENDING
+              </span>
+            ) : (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-500">
+                Active
+              </span>
+            )}
+          </button>
+        )}
 
         {navItems.map((item) => {
           const Icon = item.icon;

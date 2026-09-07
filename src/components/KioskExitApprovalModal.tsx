@@ -15,7 +15,7 @@ import {
 import { KioskExitRequest } from '../types/mdm';
 
 interface KioskExitApprovalModalProps {
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   requests: KioskExitRequest[];
   onApprove: (requestId: string, note?: string) => Promise<void>;
@@ -25,7 +25,7 @@ interface KioskExitApprovalModalProps {
 }
 
 export const KioskExitApprovalModal: React.FC<KioskExitApprovalModalProps> = ({
-  isOpen,
+  isOpen = true,
   onClose,
   requests,
   onApprove,
@@ -39,7 +39,7 @@ export const KioskExitApprovalModal: React.FC<KioskExitApprovalModalProps> = ({
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  if (isOpen === false) return null;
 
   const pendingRequests = requests.filter((r) => r.status === 'PENDING');
   const historyRequests = requests.filter((r) => r.status !== 'PENDING');

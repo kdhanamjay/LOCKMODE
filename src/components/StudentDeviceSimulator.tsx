@@ -33,7 +33,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { Device, Application, DevicePolicy, AdminBroadcastMessage, Deployment, WebFilterRule } from '../types/mdm';
-import { api } from '../lib/api';
+import { api, subscribeToMdmEvents } from '../lib/api';
 
 interface StudentDeviceSimulatorProps {
   device: Device;
@@ -130,12 +130,18 @@ export const StudentDeviceSimulator: React.FC<StudentDeviceSimulatorProps> = ({
       }
 
       // Push Heartbeat & Telemetry back to Admin Console
-      await api.simulatorHeartbeat({
+      const hbRes = await api.simulatorHeartbeat({
         deviceId: device.id,
         batteryLevel,
         isCharging,
         currentActiveApp: activeApp || 'com.eduguard.mdm.launcher',
       });
+
+      if (hbRes?.isDeleted) {
+        setViolationToast('⚠️ Device has been unenrolled and deleted from fleet inventory.');
+        setTimeout(() => onClose(), 2200);
+        return;
+      }
 
       setLastSyncTime(new Date());
       onStatusUpdated();
@@ -150,6 +156,33 @@ export const StudentDeviceSimulator: React.FC<StudentDeviceSimulatorProps> = ({
       setIsSyncing(false);
     }
   };
+
+  // Real-time SSE listener for admin lock, unlock, and delete
+  useEffect(() => {
+    const unsubscribe = subscribeToMdmEvents((eventType, data) => {
+      const matchesDevice =
+        data.id === device.id ||
+        data.deviceId === device.deviceId ||
+        data.deviceId === device.id;
+
+      if (eventType === 'device_deleted' && matchesDevice) {
+        setViolationToast('⚠️ This tablet was unenrolled and removed from fleet inventory by Administrator.');
+        setTimeout(() => onClose(), 2200);
+      } else if ((eventType === 'device_unlocked' || eventType === 'kiosk_exit_approved') && matchesDevice) {
+        onStatusUpdated();
+        setViolationToast('🔓 Workstation / Tablet unlocked by Administrator.');
+        setTimeout(() => setViolationToast(null), 3500);
+      } else if (eventType === 'device_locked' && matchesDevice) {
+        onStatusUpdated();
+        setViolationToast('🔒 Device placed under remote security lockdown.');
+        setTimeout(() => setViolationToast(null), 3500);
+      } else if (eventType === 'policy_published') {
+        runFullDeviceSync(true);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [device.id, device.deviceId, onClose, onStatusUpdated]);
 
   // Trigger sync on mount if online
   useEffect(() => {
