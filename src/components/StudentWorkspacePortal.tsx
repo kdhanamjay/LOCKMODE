@@ -413,7 +413,36 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
   // Comprehensive Keyboard & DevTools & ALT+F4 & Windows OS Tab Switching Lockdown Interceptor
   useEffect(() => {
+    // Engage Chromium / Edge Fullscreen Keyboard Lock API (Locks Tab, Escape, Alt, Meta at browser engine level)
+    const engageKeyboardLock = async () => {
+      try {
+        if ('keyboard' in navigator && (navigator as any).keyboard?.lock) {
+          await (navigator as any).keyboard.lock([
+            'Tab',
+            'Escape',
+            'AltLeft',
+            'AltRight',
+            'MetaLeft',
+            'MetaRight',
+            'KeyW',
+            'KeyQ',
+            'F11',
+            'F5'
+          ]);
+        }
+      } catch {
+        // Keyboard lock requires fullscreen or browser permission
+      }
+    };
+
+    if (!isRemotelyUnlocked) {
+      engageKeyboardLock();
+    }
+
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Re-engage keyboard lock on any keypress
+      engageKeyboardLock();
+
       // 1. Intercept ALT+F4, Ctrl+W, Ctrl+Q, Ctrl+F4, Alt+Tab, Alt+Escape, Escape from exiting
       const isAltF4 = e.altKey && (e.key === 'F4' || e.code === 'F4' || e.keyCode === 115);
       const isCtrlW = e.ctrlKey && (e.key === 'w' || e.key === 'W' || e.code === 'KeyW');
@@ -467,6 +496,13 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       ) {
         e.preventDefault();
         e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        // Immediately regrab focus
+        try {
+          window.focus();
+          document.body.focus();
+        } catch {}
 
         if (isAltTab || isCtrlTab || isCtrlPageNav || isCtrlNumberTab || isMetaWinKey) {
           triggerAlertSound();
@@ -495,6 +531,10 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     // 6. Tab Visibility Change (detect tab switch when student moves away)
     const handleVisibilityChange = () => {
       if (document.hidden || document.visibilityState === 'hidden') {
+        try {
+          window.focus();
+          document.body.focus();
+        } catch {}
         triggerAlertSound();
         setTabSwitchCount((prev) => {
           const next = prev + 1;
@@ -513,9 +553,19 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
     // 7. Window Blur (detect loss of window focus in Windows OS)
     const handleWindowBlur = () => {
-      // Small debounce to avoid false alarms during normal dropdown interactions
+      // Immediately pull window focus back so student cannot switch out
+      try {
+        window.focus();
+        document.body.focus();
+      } catch {}
+
+      // Debounce check to verify if focus was truly lost
       setTimeout(() => {
         if (!document.hasFocus()) {
+          try {
+            window.focus();
+            document.body.focus();
+          } catch {}
           triggerAlertSound();
           setTabSwitchCount((prev) => {
             const next = prev + 1;
@@ -530,7 +580,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           });
           setIsTabSwitchViolationActive(true);
         }
-      }, 200);
+      }, 150);
     };
 
     // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill

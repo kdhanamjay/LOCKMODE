@@ -1831,6 +1831,7 @@ taskkill /f /im EduGuard-Student-Kiosk.exe >nul 2>&1\r
 taskkill /f /im EduGuard-Student-Kiosk.bat >nul 2>&1\r
 taskkill /f /im Create-Student-Kiosk-EXE.bat >nul 2>&1\r
 taskkill /f /im Launch-EduGuard-Watchdog.bat >nul 2>&1\r
+taskkill /f /fi "WINDOWTITLE eq EduGuard-KeyBlocker*" >nul 2>&1\r
 taskkill /f /im wscript.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
 taskkill /f /im cmd.exe /fi "WINDOWTITLE eq EduGuard MDM*" >nul 2>&1\r
 echo [*] Terminating Kiosk Edge browser instances...\r
@@ -1850,16 +1851,79 @@ function getEduGuardCSharpCode(studentKioskUrl: string, baseUrl: string): string
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Threading;
+using System.Windows.Forms;
 
 namespace EduGuardKiosk {
     static class Program {
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int VK_TAB = 0x09;
+        private const int VK_ESCAPE = 0x1B;
+        private const int VK_LWIN = 0x5B;
+        private const int VK_RWIN = 0x5C;
+        private const int VK_SPACE = 0x20;
+        private const int LLKHF_ALTDOWN = 0x20;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KBDLLHOOKSTRUCT {
+            public int vkCode;
+            public int scanCode;
+            public int flags;
+            public int time;
+            public IntPtr dwExtraInfo;
+        }
+
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private static LowLevelKeyboardProc _proc = HookCallback;
+        private static IntPtr _hookID = IntPtr.Zero;
+
+        private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+            if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {
+                KBDLLHOOKSTRUCT hook = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+                bool isAlt = (hook.flags & LLKHF_ALTDOWN) != 0;
+                // 1. Block Alt+Tab completely from Windows Task Switcher
+                if (isAlt && hook.vkCode == VK_TAB) return (IntPtr)1;
+                // 2. Block Alt+Escape
+                if (isAlt && hook.vkCode == VK_ESCAPE) return (IntPtr)1;
+                // 3. Block Alt+Space
+                if (isAlt && hook.vkCode == VK_SPACE) return (IntPtr)1;
+                // 4. Block Windows Keys (Start menu, Win+Tab, Win+D, Win+E)
+                if (hook.vkCode == VK_LWIN || hook.vkCode == VK_RWIN) return (IntPtr)1;
+                // 5. Block Ctrl+Escape
+                if (hook.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;
+            }
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
         [STAThread]
         static void Main() {
             try {
                 ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls;
                 ServicePointManager.ServerCertificateValidationCallback = delegate { return true; };
             } catch {}
+
+            // Install low-level keyboard hook on background STA thread to disable Alt+Tab
+            Thread hookThread = new Thread(() => {
+                try {
+                    _hookID = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);
+                    Application.Run();
+                } catch {}
+            });
+            hookThread.SetApartmentState(ApartmentState.STA);
+            hookThread.IsBackground = true;
+            hookThread.Start();
 
             bool isNew;
             using (Mutex mutex = new Mutex(true, "EduGuardKiosk_SingleInstance_Mutex", out isNew)) {
@@ -2213,6 +2277,57 @@ End If\r
 \r
 kioskArgs = " --kiosk """ & targetUrl & """ --edge-kiosk-type=fullscreen --user-data-dir=""" & dataDir & """ --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing"\r
 \r
+' Write and launch Low-Level Keyboard Blocker (Disables Alt+Tab, Alt+Esc, Win Keys at Windows OS level)\r
+keyBlockerPs1 = appData & "\\EduGuardKiosk\\EduGuard-KeyBlocker.ps1"\r
+Set psFile = fso.CreateTextFile(keyBlockerPs1, True)\r
+psFile.WriteLine "$host.UI.RawUI.WindowTitle = 'EduGuard-KeyBlocker'"\r
+psFile.WriteLine "$code = @"\r
+psFile.WriteLine "using System;"\r
+psFile.WriteLine "using System.Diagnostics;"\r
+psFile.WriteLine "using System.Runtime.InteropServices;"\r
+psFile.WriteLine "using System.Windows.Forms;"\r
+psFile.WriteLine "public class KeyBlocker {"\r
+psFile.WriteLine "    private const int WH_KEYBOARD_LL = 13;"\r
+psFile.WriteLine "    private const int WM_KEYDOWN = 0x0100;"\r
+psFile.WriteLine "    private const int WM_SYSKEYDOWN = 0x0104;"\r
+psFile.WriteLine "    private const int VK_TAB = 0x09;"\r
+psFile.WriteLine "    private const int VK_ESCAPE = 0x1B;"\r
+psFile.WriteLine "    private const int VK_LWIN = 0x5B;"\r
+psFile.WriteLine "    private const int VK_RWIN = 0x5C;"\r
+psFile.WriteLine "    private const int VK_SPACE = 0x20;"\r
+psFile.WriteLine "    private const int LLKHF_ALTDOWN = 0x20;"\r
+psFile.WriteLine "    [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo; }"\r
+psFile.WriteLine "    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);"\r
+psFile.WriteLine "    private static HookProc _proc = Callback;"\r
+psFile.WriteLine "    private static IntPtr _h = IntPtr.Zero;"\r
+psFile.WriteLine "    public static void Start() {"\r
+psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);"\r
+psFile.WriteLine "        Application.Run();"\r
+psFile.WriteLine "    }"\r
+psFile.WriteLine "    private static IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam) {"\r
+psFile.WriteLine "        if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {"\r
+psFile.WriteLine "            KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"\r
+psFile.WriteLine "            bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"\r
+psFile.WriteLine "            if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1; // BLOCK ALT+TAB"\r
+psFile.WriteLine "            if (isAlt && k.vkCode == VK_ESCAPE) return (IntPtr)1; // BLOCK ALT+ESC"\r
+psFile.WriteLine "            if (isAlt && k.vkCode == VK_SPACE) return (IntPtr)1; // BLOCK ALT+SPACE"\r
+psFile.WriteLine "            if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1; // BLOCK WIN KEY"\r
+psFile.WriteLine "            if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1; // BLOCK CTRL+ESC"\r
+psFile.WriteLine "        }"\r
+psFile.WriteLine "        return CallNextHookEx(_h, nCode, wParam, lParam);"\r
+psFile.WriteLine "    }"\r
+psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"\r
+psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr CallNextHookEx(IntPtr h, int c, IntPtr w, IntPtr l);"\r
+psFile.WriteLine "    [DllImport(""kernel32.dll"")] private static extern IntPtr GetModuleHandle(string m);"\r
+psFile.WriteLine "}"\r
+psFile.WriteLine "'@"\r
+psFile.WriteLine "Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms"\r
+psFile.WriteLine "[KeyBlocker]::Start()"\r
+psFile.Close\r
+\r
+' Launch KeyBlocker silently in background (0 = completely hidden window)\r
+WshShell.Run "powershell.exe -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & keyBlockerPs1 & """", 0, False\r
+\r
 ' Launch kiosk initially (False = non-blocking so VBScript actively monitors in background)\r
 WshShell.Run """" & browserExe & """" & kioskArgs, 1, False\r
 \r
@@ -2231,15 +2346,17 @@ Do While True\r
             ' Workstation deleted by admin: terminate kiosk browser and quit\r
             WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
             WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
+            WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True\r
             WScript.Sleep 500\r
             WshShell.Run "taskkill /f /im msedge.exe", 0, True\r
             WScript.Quit 0\r
         End If\r
         If InStr(resp, """isLocked"":false") > 0 Or InStr(resp, """kioskActive"":false") > 0 Then\r
             ' WORKSTATION UNLOCKED / APPROVED BY ADMINISTRATOR!\r
-            ' Terminate all kiosk windows immediately to restore clean Windows Desktop!\r
+            ' Terminate all kiosk windows & key blocker immediately to restore clean Windows Desktop!\r
             WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
             WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True\r
+            WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True\r
             WScript.Sleep 500\r
             WshShell.Run "taskkill /f /im msedge.exe", 0, True\r
             \r
@@ -2254,7 +2371,8 @@ Do While True\r
                     idleResp = httpIdle.responseText\r
                     If InStr(idleResp, """isDeleted"":true") > 0 Then WScript.Quit 0\r
                     If InStr(idleResp, """isLocked"":true") > 0 And InStr(idleResp, """kioskActive"":true") > 0 Then\r
-                        ' Admin dispatched Remote Lock! Relaunch kiosk immediately!\r
+                        ' Admin dispatched Remote Lock! Relaunch keyblocker and kiosk immediately!\r
+                        WshShell.Run "powershell.exe -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & keyBlockerPs1 & """", 0, False\r
                         Exit Do\r
                     End If\r
                 End If\r
@@ -2263,6 +2381,7 @@ Do While True\r
             WshShell.Run """" & browserExe & """" & kioskArgs, 1, False\r
         End If\r
     ElseIf http.Status = 404 Then\r
+        WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True\r
         WshShell.Run "taskkill /f /im msedge.exe", 0, True\r
         WScript.Quit 0\r
     End If\r
@@ -2317,6 +2436,10 @@ echo.\r
 \r
 :START_KIOSK\r
 echo [%time%] Starting EduGuard Student Kiosk for workstation !DEV_ID!...\r
+:: Ensure KeyBlocker is running in background to disable Alt+Tab\r
+if exist "%LOCALAPPDATA%\\EduGuardKiosk\\EduGuard-KeyBlocker.ps1" (\r
+    start "" /b powershell.exe -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\\EduGuardKiosk\\EduGuard-KeyBlocker.ps1"\r
+)\r
 start "" "!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing\r
 \r
 :MONITOR_LOOP\r
@@ -2333,6 +2456,7 @@ if !STATUS_CODE! equ 2 (\r
     echo ====================================================================\r
     taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
     taskkill /f /im msedge.exe >nul 2>&1\r
+    taskkill /f /fi "WINDOWTITLE eq EduGuard-KeyBlocker*" >nul 2>&1\r
     exit /b 0\r
 )\r
 if !STATUS_CODE! equ 1 (\r
@@ -2343,6 +2467,7 @@ if !STATUS_CODE! equ 1 (\r
     echo ====================================================================\r
     taskkill /f /im msedge.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
     taskkill /f /im chrome.exe /fi "WINDOWTITLE eq EduGuard*" >nul 2>&1\r
+    taskkill /f /fi "WINDOWTITLE eq EduGuard-KeyBlocker*" >nul 2>&1\r
     timeout /t 1 /nobreak >nul\r
     taskkill /f /im msedge.exe >nul 2>&1\r
     echo  [SUCCESS] All kiosk windows closed! Windows desktop restored.\r
