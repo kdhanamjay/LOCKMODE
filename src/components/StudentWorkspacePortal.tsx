@@ -366,6 +366,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   const [unlockPin, setUnlockPin] = useState('');
   const [unlockError, setUnlockError] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const isFullscreenTransitioningRef = useRef(false);
 
   // Sound generator for security alerts
   const triggerAlertSound = () => {
@@ -530,6 +531,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
     // 6. Tab Visibility Change (detect tab switch when student moves away)
     const handleVisibilityChange = () => {
+      if (isFullscreenTransitioningRef.current) return;
       if (document.hidden || document.visibilityState === 'hidden') {
         try {
           window.focus();
@@ -553,6 +555,9 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
     // 7. Window Blur (detect loss of window focus in Windows OS)
     const handleWindowBlur = () => {
+      // If user is toggling fullscreen or OS is performing window resize handshake, suppress false positive
+      if (isFullscreenTransitioningRef.current) return;
+
       // Immediately pull window focus back so student cannot switch out
       try {
         window.focus();
@@ -561,6 +566,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
       // Debounce check to verify if focus was truly lost
       setTimeout(() => {
+        if (isFullscreenTransitioningRef.current) return;
         if (!document.hasFocus()) {
           try {
             window.focus();
@@ -580,7 +586,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           });
           setIsTabSwitchViolationActive(true);
         }
-      }, 150);
+      }, 300);
     };
 
     // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
@@ -600,12 +606,23 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       setTimeout(() => setViolationToast(null), 3000);
     };
 
+    // 10. Handle fullscreen changes smoothly (e.g. user or script changes state)
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      // Briefly maintain the guard window until layout settles
+      isFullscreenTransitioningRef.current = true;
+      setTimeout(() => {
+        isFullscreenTransitioningRef.current = false;
+      }, 1000);
+    };
+
     if (!isRemotelyUnlocked) {
       window.addEventListener('keydown', handleKeyDown, true);
       document.addEventListener('visibilitychange', handleVisibilityChange);
       window.addEventListener('blur', handleWindowBlur);
       window.addEventListener('beforeunload', handleBeforeUnload);
       window.addEventListener('popstate', handlePopState);
+      document.addEventListener('fullscreenchange', handleFullscreenChange);
     }
 
     return () => {
@@ -614,6 +631,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       window.removeEventListener('blur', handleWindowBlur);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('popstate', handlePopState);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, [currentDevice.id, currentDevice.deviceId, isRemotelyUnlocked]);
 
@@ -1068,14 +1086,39 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     }
   };
 
-  // Fullscreen toggle
+  // Fullscreen toggle (protected with transition lock to prevent false-positive window blur or switching violations)
   const toggleFullscreen = () => {
+    isFullscreenTransitioningRef.current = true;
     if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-      setIsFullscreen(true);
+      document.documentElement.requestFullscreen()
+        .then(() => {
+          setIsFullscreen(true);
+          try {
+            window.focus();
+            document.body.focus();
+          } catch {}
+        })
+        .catch(() => {})
+        .finally(() => {
+          setTimeout(() => {
+            isFullscreenTransitioningRef.current = false;
+          }, 1000);
+        });
     } else {
-      document.exitFullscreen().catch(() => {});
-      setIsFullscreen(false);
+      document.exitFullscreen()
+        .then(() => {
+          setIsFullscreen(false);
+          try {
+            window.focus();
+            document.body.focus();
+          } catch {}
+        })
+        .catch(() => {})
+        .finally(() => {
+          setTimeout(() => {
+            isFullscreenTransitioningRef.current = false;
+          }, 1000);
+        });
     }
   };
 

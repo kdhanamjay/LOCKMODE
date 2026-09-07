@@ -8,6 +8,7 @@ import {
   Terminal,
   Eye,
   EyeOff,
+  Shield,
   ShieldCheck,
   Lock,
   Monitor,
@@ -211,12 +212,15 @@ namespace EduGuardKiosk {
     static class Program {
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
         private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_SYSKEYUP = 0x0105;
         private const int VK_TAB = 0x09;
         private const int VK_ESCAPE = 0x1B;
         private const int VK_LWIN = 0x5B;
         private const int VK_RWIN = 0x5C;
         private const int VK_SPACE = 0x20;
+        private const int VK_F4 = 0x73;
         private const int LLKHF_ALTDOWN = 0x20;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -233,19 +237,22 @@ namespace EduGuardKiosk {
         private static IntPtr _hookID = IntPtr.Zero;
 
         private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
-            if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {
-                KBDLLHOOKSTRUCT hook = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
-                bool isAlt = (hook.flags & LLKHF_ALTDOWN) != 0;
-                // 1. Block Alt+Tab completely from Windows Task Switcher
-                if (isAlt && hook.vkCode == VK_TAB) return (IntPtr)1;
-                // 2. Block Alt+Escape
-                if (isAlt && hook.vkCode == VK_ESCAPE) return (IntPtr)1;
-                // 3. Block Alt+Space
-                if (isAlt && hook.vkCode == VK_SPACE) return (IntPtr)1;
-                // 4. Block Windows Keys (Start menu, Win+Tab, Win+D, Win+E)
-                if (hook.vkCode == VK_LWIN || hook.vkCode == VK_RWIN) return (IntPtr)1;
-                // 5. Block Ctrl+Escape
-                if (hook.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;
+            if (nCode >= 0) {
+                int msg = (int)wParam;
+                if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP) {
+                    KBDLLHOOKSTRUCT hook = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));
+                    bool isAlt = (hook.flags & LLKHF_ALTDOWN) != 0;
+                    // 1. Block Alt+Tab completely from Windows Task Switcher
+                    if (isAlt && hook.vkCode == VK_TAB) return (IntPtr)1;
+                    // 2. Block Alt+Escape and Alt+Space
+                    if (isAlt && (hook.vkCode == VK_ESCAPE || hook.vkCode == VK_SPACE)) return (IntPtr)1;
+                    // 3. Block Alt+F4
+                    if (isAlt && hook.vkCode == VK_F4) return (IntPtr)1;
+                    // 4. Block Windows Keys (Start menu, Win+Tab, Win+D, Win+E)
+                    if (hook.vkCode == VK_LWIN || hook.vkCode == VK_RWIN) return (IntPtr)1;
+                    // 5. Block Ctrl+Escape
+                    if (hook.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;
+                }
             }
             return CallNextHookEx(_hookID, nCode, wParam, lParam);
         }
@@ -257,7 +264,7 @@ namespace EduGuardKiosk {
         private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
+        private static extern IntPtr GetModuleHandle(IntPtr lpModuleName);
 
         [STAThread]
         static void Main() {
@@ -269,7 +276,7 @@ namespace EduGuardKiosk {
             // Install low-level keyboard hook on background STA thread to disable Alt+Tab
             Thread hookThread = new Thread(() => {
                 try {
-                    _hookID = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);
+                    _hookID = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(IntPtr.Zero), 0);
                     Application.Run();
                 } catch {}
             });
@@ -606,36 +613,48 @@ psFile.WriteLine "using System.Windows.Forms;"
 psFile.WriteLine "public class KeyBlocker {"
 psFile.WriteLine "    private const int WH_KEYBOARD_LL = 13;"
 psFile.WriteLine "    private const int WM_KEYDOWN = 0x0100;"
+psFile.WriteLine "    private const int WM_KEYUP = 0x0101;"
 psFile.WriteLine "    private const int WM_SYSKEYDOWN = 0x0104;"
+psFile.WriteLine "    private const int WM_SYSKEYUP = 0x0105;"
 psFile.WriteLine "    private const int VK_TAB = 0x09;"
 psFile.WriteLine "    private const int VK_ESCAPE = 0x1B;"
 psFile.WriteLine "    private const int VK_LWIN = 0x5B;"
 psFile.WriteLine "    private const int VK_RWIN = 0x5C;"
 psFile.WriteLine "    private const int VK_SPACE = 0x20;"
+psFile.WriteLine "    private const int VK_F4 = 0x73;"
 psFile.WriteLine "    private const int LLKHF_ALTDOWN = 0x20;"
 psFile.WriteLine "    [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo; }"
 psFile.WriteLine "    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);"
 psFile.WriteLine "    private static HookProc _proc = Callback;"
 psFile.WriteLine "    private static IntPtr _h = IntPtr.Zero;"
 psFile.WriteLine "    public static void Start() {"
-psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);"
+psFile.WriteLine "        IntPtr hMod = GetModuleHandle(IntPtr.Zero);"
+psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hMod, 0);"
 psFile.WriteLine "        Application.Run();"
 psFile.WriteLine "    }"
 psFile.WriteLine "    private static IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam) {"
-psFile.WriteLine "        if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {"
-psFile.WriteLine "            KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"
-psFile.WriteLine "            bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"
-psFile.WriteLine "            if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1; // BLOCK ALT+TAB"
-psFile.WriteLine "            if (isAlt && k.vkCode == VK_ESCAPE) return (IntPtr)1; // BLOCK ALT+ESC"
-psFile.WriteLine "            if (isAlt && k.vkCode == VK_SPACE) return (IntPtr)1; // BLOCK ALT+SPACE"
-psFile.WriteLine "            if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1; // BLOCK WIN KEY"
-psFile.WriteLine "            if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1; // BLOCK CTRL+ESC"
+psFile.WriteLine "        if (nCode >= 0) {"
+psFile.WriteLine "            int msg = (int)wParam;"
+psFile.WriteLine "            if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP) {"
+psFile.WriteLine "                KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"
+psFile.WriteLine "                bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"
+psFile.WriteLine "                // 1. Physically Block Alt+Tab and Shift+Alt+Tab"
+psFile.WriteLine "                if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1;"
+psFile.WriteLine "                // 2. Physically Block Alt+Esc and Alt+Space (system window menus)"
+psFile.WriteLine "                if (isAlt && (k.vkCode == VK_ESCAPE || k.vkCode == VK_SPACE)) return (IntPtr)1;"
+psFile.WriteLine "                // 3. Physically Block Alt+F4 window close attempt"
+psFile.WriteLine "                if (isAlt && k.vkCode == VK_F4) return (IntPtr)1;"
+psFile.WriteLine "                // 4. Physically Block Windows Left and Right keys"
+psFile.WriteLine "                if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1;"
+psFile.WriteLine "                // 5. Physically Block Ctrl+Esc (Start menu toggle)"
+psFile.WriteLine "                if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;"
+psFile.WriteLine "            }"
 psFile.WriteLine "        }"
 psFile.WriteLine "        return CallNextHookEx(_h, nCode, wParam, lParam);"
 psFile.WriteLine "    }"
-psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"
+psFile.WriteLine "    [DllImport(""user32.dll"", SetLastError = true)] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"
 psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr CallNextHookEx(IntPtr h, int c, IntPtr w, IntPtr l);"
-psFile.WriteLine "    [DllImport(""kernel32.dll"")] private static extern IntPtr GetModuleHandle(string m);"
+psFile.WriteLine "    [DllImport(""kernel32.dll"", CharSet = CharSet.Auto, SetLastError = true)] private static extern IntPtr GetModuleHandle(IntPtr m);"
 psFile.WriteLine "}"
 psFile.WriteLine "'@"
 psFile.WriteLine "Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms"
@@ -1326,6 +1345,26 @@ Start-Process -FilePath $EdgePath -ArgumentList $KioskArgs
               <pre className="text-[11px] font-mono bg-gray-900/60 p-4 rounded-2xl overflow-x-auto text-emerald-400 border border-gray-800">
                 {jsonString}
               </pre>
+            </div>
+
+            {/* Android Architecture & Kiosk Lock Enforcement Notice */}
+            <div className="bg-amber-50/70 border border-amber-200 rounded-3xl p-5 text-xs text-amber-950 space-y-2">
+              <div className="flex items-center space-x-2 font-bold text-amber-900">
+                <Shield className="w-4 h-4 text-amber-700" />
+                <span>How Android Tablets & Mobiles Enforce Unswitchable Kiosk Mode</span>
+              </div>
+              <p className="leading-relaxed text-amber-900/90">
+                On Windows PCs, window switching (<code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px]">Alt+Tab</code>, <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px]">Win</code>) is physically intercepted by our low-level Windows hook (<code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px]">SetWindowsHookEx</code>).
+              </p>
+              <p className="leading-relaxed text-amber-900/90">
+                On <strong>Android Tablets and Mobiles</strong>, the operating system does not use Windows DLLs or Alt-Tab. Instead, the QR Code provisions the EduGuard DPC as <strong>Device Owner</strong>, enabling <strong>Dedicated Device (COSU / Lock Task Mode)</strong>. This enforces:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-[11px] text-amber-950 font-medium pl-1">
+                <li><strong>Home & Recent Apps (Overview) Buttons Disabled:</strong> Students cannot swipe up or press square/pill to switch apps.</li>
+                <li><strong>Status Bar & Notification Shade Disabled:</strong> Pulling down from the top to access Settings or Quick Tiles is blocked.</li>
+                <li><strong>System Dialogs & Power Menu Restricted:</strong> Power off / reboot prompts cannot be abused to escape kiosk mode.</li>
+                <li><strong>Single-App Pinning:</strong> EduGuard Student Workspace stays permanently pinned until released by the Administrator.</li>
+              </ul>
             </div>
           </div>
         </div>

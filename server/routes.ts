@@ -2289,36 +2289,48 @@ psFile.WriteLine "using System.Windows.Forms;"\r
 psFile.WriteLine "public class KeyBlocker {"\r
 psFile.WriteLine "    private const int WH_KEYBOARD_LL = 13;"\r
 psFile.WriteLine "    private const int WM_KEYDOWN = 0x0100;"\r
+psFile.WriteLine "    private const int WM_KEYUP = 0x0101;"\r
 psFile.WriteLine "    private const int WM_SYSKEYDOWN = 0x0104;"\r
+psFile.WriteLine "    private const int WM_SYSKEYUP = 0x0105;"\r
 psFile.WriteLine "    private const int VK_TAB = 0x09;"\r
 psFile.WriteLine "    private const int VK_ESCAPE = 0x1B;"\r
 psFile.WriteLine "    private const int VK_LWIN = 0x5B;"\r
 psFile.WriteLine "    private const int VK_RWIN = 0x5C;"\r
 psFile.WriteLine "    private const int VK_SPACE = 0x20;"\r
+psFile.WriteLine "    private const int VK_F4 = 0x73;"\r
 psFile.WriteLine "    private const int LLKHF_ALTDOWN = 0x20;"\r
 psFile.WriteLine "    [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo; }"\r
 psFile.WriteLine "    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);"\r
 psFile.WriteLine "    private static HookProc _proc = Callback;"\r
 psFile.WriteLine "    private static IntPtr _h = IntPtr.Zero;"\r
 psFile.WriteLine "    public static void Start() {"\r
-psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName), 0);"\r
+psFile.WriteLine "        IntPtr hMod = GetModuleHandle(IntPtr.Zero);"\r
+psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hMod, 0);"\r
 psFile.WriteLine "        Application.Run();"\r
 psFile.WriteLine "    }"\r
 psFile.WriteLine "    private static IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam) {"\r
-psFile.WriteLine "        if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)) {"\r
-psFile.WriteLine "            KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"\r
-psFile.WriteLine "            bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"\r
-psFile.WriteLine "            if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1; // BLOCK ALT+TAB"\r
-psFile.WriteLine "            if (isAlt && k.vkCode == VK_ESCAPE) return (IntPtr)1; // BLOCK ALT+ESC"\r
-psFile.WriteLine "            if (isAlt && k.vkCode == VK_SPACE) return (IntPtr)1; // BLOCK ALT+SPACE"\r
-psFile.WriteLine "            if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1; // BLOCK WIN KEY"\r
-psFile.WriteLine "            if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1; // BLOCK CTRL+ESC"\r
+psFile.WriteLine "        if (nCode >= 0) {"\r
+psFile.WriteLine "            int msg = (int)wParam;"\r
+psFile.WriteLine "            if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP) {"\r
+psFile.WriteLine "                KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"\r
+psFile.WriteLine "                bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"\r
+psFile.WriteLine "                // 1. Physically Block Alt+Tab and Shift+Alt+Tab"\r
+psFile.WriteLine "                if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1;"\r
+psFile.WriteLine "                // 2. Physically Block Alt+Esc and Alt+Space (system window menus)"\r
+psFile.WriteLine "                if (isAlt && (k.vkCode == VK_ESCAPE || k.vkCode == VK_SPACE)) return (IntPtr)1;"\r
+psFile.WriteLine "                // 3. Physically Block Alt+F4 window close attempt"\r
+psFile.WriteLine "                if (isAlt && k.vkCode == VK_F4) return (IntPtr)1;"\r
+psFile.WriteLine "                // 4. Physically Block Windows Left and Right keys"\r
+psFile.WriteLine "                if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1;"\r
+psFile.WriteLine "                // 5. Physically Block Ctrl+Esc (Start menu toggle)"\r
+psFile.WriteLine "                if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;"\r
+psFile.WriteLine "            }"\r
 psFile.WriteLine "        }"\r
 psFile.WriteLine "        return CallNextHookEx(_h, nCode, wParam, lParam);"\r
 psFile.WriteLine "    }"\r
-psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"\r
+psFile.WriteLine "    [DllImport(""user32.dll"", SetLastError = true)] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"\r
 psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr CallNextHookEx(IntPtr h, int c, IntPtr w, IntPtr l);"\r
-psFile.WriteLine "    [DllImport(""kernel32.dll"")] private static extern IntPtr GetModuleHandle(string m);"\r
+psFile.WriteLine "    [DllImport(""kernel32.dll"", CharSet = CharSet.Auto, SetLastError = true)] private static extern IntPtr GetModuleHandle(IntPtr m);"\r
 psFile.WriteLine "}"\r
 psFile.WriteLine "'@"\r
 psFile.WriteLine "Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms"\r
