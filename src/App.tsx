@@ -718,6 +718,7 @@ export function App() {
               <EnrollmentView
                 tokens={tokens}
                 classes={classes}
+                devices={devices}
                 onCreateToken={() => {}}
                 onLaunchStudentPortal={() => setIsStudentWorkspaceOpen(true)}
               />

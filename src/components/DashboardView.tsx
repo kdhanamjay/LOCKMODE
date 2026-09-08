@@ -14,9 +14,12 @@ import {
   Layers,
   QrCode,
   BatteryCharging,
+  Download,
+  Key,
 } from 'lucide-react';
 import { DashboardStats, Device, PolicyViolation } from '../types/mdm';
 import { NavSection } from './Sidebar';
+import { exportDeviceCredentialsCsv } from '../utils/exportCredentialsCsv';
 
 interface DashboardViewProps {
   stats: DashboardStats;
@@ -49,7 +52,15 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <p className="text-[11px] text-gray-400 font-bold uppercase tracking-widest mb-1">Fleet Telemetry</p>
           <h1 className="text-3xl sm:text-4xl font-light tracking-tight text-gray-950">System Overview</h1>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            onClick={() => exportDeviceCredentialsCsv(devices)}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-all flex items-center space-x-1.5 cursor-pointer"
+            title="Download CSV file with all workstation passwords and student credentials"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Download Passwords (CSV)</span>
+          </button>
           {onOpenExitRequestsModal && (
             <button
               onClick={onOpenExitRequestsModal}

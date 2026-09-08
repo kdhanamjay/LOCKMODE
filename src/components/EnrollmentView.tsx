@@ -27,17 +27,20 @@ import {
   RefreshCw,
   Zap,
 } from 'lucide-react';
-import { EnrollmentToken, SchoolClass } from '../types/mdm';
+import { Device, EnrollmentToken, SchoolClass } from '../types/mdm';
+import { exportDeviceCredentialsCsv } from '../utils/exportCredentialsCsv';
 
 interface EnrollmentViewProps {
   tokens: EnrollmentToken[];
   classes: SchoolClass[];
+  devices?: Device[];
   onCreateToken: (data: any) => void;
   onLaunchStudentPortal?: () => void;
 }
 
 export const EnrollmentView: React.FC<EnrollmentViewProps> = ({
   classes,
+  devices = [],
   onLaunchStudentPortal,
 }) => {
   const [platformTab, setPlatformTab] = useState<'android' | 'windows'>('windows');
@@ -825,30 +828,40 @@ Start-Process -FilePath $EdgePath -ArgumentList $KioskArgs
           </p>
         </div>
 
-        {/* Platform Switcher Buttons */}
-        <div className="flex p-1 bg-gray-100 rounded-2xl shrink-0 self-start md:self-auto">
+        {/* Platform Switcher Buttons & Download CSV */}
+        <div className="flex items-center gap-2 flex-wrap shrink-0 self-start md:self-auto">
           <button
-            onClick={() => setPlatformTab('windows')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
-              platformTab === 'windows'
-                ? 'bg-white text-gray-950 shadow-xs'
-                : 'text-gray-600 hover:text-gray-950'
-            }`}
+            onClick={() => exportDeviceCredentialsCsv(devices)}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-all cursor-pointer"
+            title="Download CSV spreadsheet of all workstation IDs, student usernames, unique passwords, and MAC addresses"
           >
-            <Monitor className="w-4 h-4 text-blue-600" />
-            <span>Windows 10 & 11 PCs</span>
+            <Download className="w-4 h-4" />
+            <span>Download Passwords (CSV)</span>
           </button>
-          <button
-            onClick={() => setPlatformTab('android')}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
-              platformTab === 'android'
-                ? 'bg-white text-gray-950 shadow-xs'
-                : 'text-gray-600 hover:text-gray-950'
-            }`}
-          >
-            <Tablet className="w-4 h-4 text-emerald-600" />
-            <span>Android Tablets (QR Code)</span>
-          </button>
+          <div className="flex p-1 bg-gray-100 rounded-2xl">
+            <button
+              onClick={() => setPlatformTab('windows')}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
+                platformTab === 'windows'
+                  ? 'bg-white text-gray-950 shadow-xs'
+                  : 'text-gray-600 hover:text-gray-950'
+              }`}
+            >
+              <Monitor className="w-4 h-4 text-blue-600" />
+              <span>Windows 10 & 11 PCs</span>
+            </button>
+            <button
+              onClick={() => setPlatformTab('android')}
+              className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center space-x-2 transition-all cursor-pointer ${
+                platformTab === 'android'
+                  ? 'bg-white text-gray-950 shadow-xs'
+                  : 'text-gray-600 hover:text-gray-950'
+              }`}
+            >
+              <Tablet className="w-4 h-4 text-emerald-600" />
+              <span>Android Tablets (QR Code)</span>
+            </button>
+          </div>
         </div>
       </div>
 

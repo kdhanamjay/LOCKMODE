@@ -16,6 +16,11 @@ import {
   Info,
   Trash2,
   AlertTriangle,
+  Key,
+  Copy,
+  Eye,
+  EyeOff,
+  Check,
 } from 'lucide-react';
 import { Device, Application, DevicePolicy, AppUsageRecord, PolicyViolation } from '../types/mdm';
 
@@ -52,6 +57,15 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
 
   const [activeTab, setActiveTab] = useState<DetailTab>('overview');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = (key: string, value: string) => {
+    navigator.clipboard.writeText(value);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+
   const activePolicy = policies.find((p) => p.id === device.policyId) || policies[0];
   const deviceUsage = usageRecords.filter((u) => u.deviceId === device.id);
   const deviceViolations = violations.filter((v) => v.deviceId === device.id);
@@ -210,6 +224,105 @@ export const DeviceDetailModal: React.FC<DeviceDetailModalProps> = ({
         <div className="flex-1 overflow-y-auto p-8">
           {activeTab === 'overview' && (
             <div className="space-y-6">
+              {/* Station Login Credentials Card */}
+              <div className="bg-amber-50/60 p-6 rounded-2xl border border-amber-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center font-bold">
+                      <Key className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-sm text-gray-950">Station Login & Proctor Credentials</h4>
+                      <p className="text-[11px] text-gray-500">
+                        Login credentials for student workstation access and kiosk exit validation.
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                    UNIQUE STATION PASS
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Student Username */}
+                  <div className="bg-white p-3.5 rounded-xl border border-amber-100 shadow-2xs">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">
+                      Student Username
+                    </span>
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-gray-900 truncate">
+                        {device.studentUsername || `student.${device.deviceId.toLowerCase().replace(/[^a-z0-9]/g, '')}`}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleCopy(
+                            'user',
+                            device.studentUsername || `student.${device.deviceId.toLowerCase().replace(/[^a-z0-9]/g, '')}`
+                          )
+                        }
+                        className="p-1 text-gray-400 hover:text-gray-900 rounded transition-colors cursor-pointer"
+                        title="Copy username"
+                      >
+                        {copiedKey === 'user' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Default Station Password */}
+                  <div className="bg-white p-3.5 rounded-xl border border-amber-100 shadow-2xs">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">
+                      Default Station Password
+                    </span>
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-amber-950">
+                        {showPassword ? (device.defaultPassword || 'EG-2026') : '••••••••'}
+                      </span>
+                      <div className="flex items-center space-x-1">
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="p-1 text-gray-400 hover:text-gray-900 rounded transition-colors cursor-pointer"
+                          title={showPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCopy('pass', device.defaultPassword || 'EG-2026')}
+                          className="p-1 text-gray-400 hover:text-gray-900 rounded transition-colors cursor-pointer"
+                          title="Copy station password"
+                        >
+                          {copiedKey === 'pass' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* MAC Address */}
+                  <div className="bg-white p-3.5 rounded-xl border border-amber-100 shadow-2xs">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">
+                      Physical MAC Address
+                    </span>
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-semibold text-gray-900 truncate">
+                        {device.macAddress || 'Auto-Detected'}
+                      </span>
+                      {device.macAddress && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopy('mac', device.macAddress || '')}
+                          className="p-1 text-gray-400 hover:text-gray-900 rounded transition-colors cursor-pointer"
+                          title="Copy MAC Address"
+                        >
+                          {copiedKey === 'mac' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Hardware & Spec Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xs space-y-3">

@@ -20,8 +20,15 @@ import {
   Trash2,
   AlertTriangle,
   X,
+  Download,
+  Key,
+  Copy,
+  Eye,
+  EyeOff,
+  Check,
 } from 'lucide-react';
 import { Device, KioskExitRequest } from '../types/mdm';
+import { exportDeviceCredentialsCsv } from '../utils/exportCredentialsCsv';
 
 interface DevicesViewProps {
   devices: Device[];
@@ -53,6 +60,15 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ONLINE' | 'OFFLINE' | 'LOCKED'>('ALL');
   const [selectedClass] = useState<string>('ALL');
   const [deviceToDelete, setDeviceToDelete] = useState<Device | null>(null);
+  const [showAllPasswords, setShowAllPasswords] = useState<boolean>(false);
+  const [copiedDeviceId, setCopiedDeviceId] = useState<string | null>(null);
+
+  const handleCopyPassword = (e: React.MouseEvent, id: string, pass: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(pass);
+    setCopiedDeviceId(id);
+    setTimeout(() => setCopiedDeviceId(null), 2000);
+  };
 
   const pendingExitCount = exitRequests.filter((r) => r.status === 'PENDING').length;
 
@@ -162,6 +178,26 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
               <span>Exit Approvals {pendingExitCount > 0 ? `(${pendingExitCount})` : ''}</span>
             </button>
           )}
+
+          {/* Download Fleet Passwords CSV */}
+          <button
+            onClick={() => exportDeviceCredentialsCsv(filteredDevices.length > 0 ? filteredDevices : devices)}
+            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition-all flex items-center space-x-1.5 shadow-xs font-semibold cursor-pointer shrink-0"
+            title="Download CSV spreadsheet containing all Device IDs, Student Usernames, Unique Station Passwords, MAC & IP Addresses"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Download Passwords (CSV)</span>
+          </button>
+
+          {/* Toggle Passwords Visibility */}
+          <button
+            onClick={() => setShowAllPasswords(!showAllPasswords)}
+            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-all flex items-center space-x-1.5 text-xs font-medium cursor-pointer"
+            title={showAllPasswords ? 'Hide station passwords' : 'Show all station passwords'}
+          >
+            {showAllPasswords ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            <span>{showAllPasswords ? 'Hide' : 'Show'}</span>
+          </button>
         </div>
       </div>
 
@@ -173,6 +209,7 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
               <tr className="bg-gray-50/60 border-b border-gray-100 text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                 <th className="py-4 px-6">Device Identity</th>
                 <th className="py-4 px-6">Assigned Student</th>
+                <th className="py-4 px-6">Station Credentials & Passwords</th>
                 <th className="py-4 px-6">Hardware & OS</th>
                 <th className="py-4 px-6">Status & DPC Mode</th>
                 <th className="py-4 px-6">Battery & Network</th>
@@ -218,6 +255,44 @@ export const DevicesView: React.FC<DevicesViewProps> = ({
                   <td className="py-4 px-6">
                     <div className="font-semibold text-gray-900">{device.assignedStudentName || 'Unassigned'}</div>
                     <div className="text-[11px] text-gray-400">{device.className || 'General Pool'}</div>
+                  </td>
+
+                  {/* Station Credentials & Passwords */}
+                  <td className="py-4 px-6" onClick={(e) => e.stopPropagation()}>
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-[10px] text-gray-400 font-mono">User:</span>
+                        <span className="font-mono text-xs font-semibold text-gray-900 bg-gray-50 px-1.5 py-0.5 rounded border border-gray-200/60">
+                          {device.studentUsername || `student.${device.deviceId.toLowerCase().replace(/[^a-z0-9]/g, '')}`}
+                        </span>
+                      </div>
+                      <div className="flex items-center space-x-1.5">
+                        <span className="text-[10px] text-gray-400 font-mono">Pass:</span>
+                        <span className="font-mono text-xs font-bold text-gray-950 bg-amber-50 text-amber-900 px-1.5 py-0.5 rounded border border-amber-200 flex items-center space-x-1">
+                          <Key className="w-2.5 h-2.5 text-amber-600 shrink-0" />
+                          <span>
+                            {showAllPasswords
+                              ? (device.defaultPassword || 'EG-2026')
+                              : (device.defaultPassword ? '••••••••' : 'EG-2026')}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleCopyPassword(e, device.id, device.defaultPassword || 'EG-2026')}
+                          className="p-1 text-gray-400 hover:text-gray-800 hover:bg-gray-100 rounded transition-colors cursor-pointer"
+                          title="Copy station password"
+                        >
+                          {copiedDeviceId === device.id ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                      </div>
+                      <div className="text-[10px] font-mono text-gray-400 truncate max-w-[140px]" title={`MAC: ${device.macAddress || 'N/A'}`}>
+                        MAC: {device.macAddress || 'Auto-Detected'}
+                      </div>
+                    </div>
                   </td>
 
                   {/* Hardware & OS */}
