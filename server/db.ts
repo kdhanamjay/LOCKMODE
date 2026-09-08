@@ -24,6 +24,32 @@ import {
   KioskExitRequest,
 } from '../src/types/mdm';
 
+export function generateMacAddress(seed?: string): string {
+  if (seed) {
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) {
+      hash = (hash << 5) - hash + seed.charCodeAt(i);
+      hash |= 0;
+    }
+    const hex = Math.abs(hash).toString(16).padStart(8, '0').toUpperCase();
+    return `00:1A:2B:${hex.slice(0, 2)}:${hex.slice(2, 4)}:${hex.slice(4, 6)}`;
+  }
+  const hexDigits = '0123456789ABCDEF';
+  let mac = '00:1A:2B:';
+  for (let i = 0; i < 3; i++) {
+    mac += hexDigits[Math.floor(Math.random() * 16)] + hexDigits[Math.floor(Math.random() * 16)];
+    if (i < 2) mac += ':';
+  }
+  return mac;
+}
+
+export function generateUniqueStationPassword(prefix = 'EG'): string {
+  const num = Math.floor(1000 + Math.random() * 9000);
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const char = chars[Math.floor(Math.random() * chars.length)];
+  return `${prefix}-${num}${char}`;
+}
+
 class DatabaseStore {
   schools: School[] = [];
   classes: SchoolClass[] = [];
@@ -425,11 +451,15 @@ class DatabaseStore {
         className: 'Class XII-A',
         assignedStudentId: 'stu-101',
         assignedStudentName: 'Rahul Sharma',
+        assignedStudentRoll: '12-A-01',
+        studentUsername: 'rahul.sharma',
+        defaultPassword: 'EG-9281A',
         batteryLevel: 78,
         isCharging: false,
         networkType: 'WIFI',
         wifiSsid: 'School-Enterprise-Secure',
         ipAddress: '10.142.18.94',
+        macAddress: '00:1A:2B:94:18:2A',
         storageTotalGb: 64.0,
         storageUsedGb: 14.2,
         ramTotalGb: 6.0,
@@ -467,11 +497,15 @@ class DatabaseStore {
         className: 'Class XII-A',
         assignedStudentId: 'stu-102',
         assignedStudentName: 'Ananya Verma',
+        assignedStudentRoll: '12-A-02',
+        studentUsername: 'ananya.verma',
+        defaultPassword: 'EG-7140B',
         batteryLevel: 92,
         isCharging: true,
         networkType: 'WIFI',
         wifiSsid: 'School-Enterprise-Secure',
         ipAddress: '10.142.18.95',
+        macAddress: '00:1A:2B:95:22:3C',
         storageTotalGb: 128.0,
         storageUsedGb: 18.5,
         ramTotalGb: 8.0,
@@ -509,11 +543,15 @@ class DatabaseStore {
         className: 'Class XII-A',
         assignedStudentId: 'stu-103',
         assignedStudentName: 'Rohan Gupta',
+        assignedStudentRoll: '12-A-03',
+        studentUsername: 'rohan.gupta',
+        defaultPassword: 'EG-6391C',
         batteryLevel: 45,
         isCharging: false,
         networkType: 'WIFI',
         wifiSsid: 'School-Enterprise-Secure',
         ipAddress: '10.142.18.96',
+        macAddress: '00:1A:2B:96:4D:5E',
         storageTotalGb: 128.0,
         storageUsedGb: 22.0,
         ramTotalGb: 8.0,
@@ -550,9 +588,14 @@ class DatabaseStore {
         className: 'Class XII-B',
         assignedStudentId: 'stu-104',
         assignedStudentName: 'Priya Nair',
+        assignedStudentRoll: '12-B-04',
+        studentUsername: 'priya.nair',
+        defaultPassword: 'EG-5129D',
         batteryLevel: 14,
         isCharging: false,
         networkType: 'NONE',
+        macAddress: '00:1A:2B:A9:12:09',
+        ipAddress: '10.142.18.97',
         storageTotalGb: 64.0,
         storageUsedGb: 19.8,
         ramTotalGb: 4.0,
@@ -563,6 +606,98 @@ class DatabaseStore {
         lastHeartbeat: new Date(Date.now() - 3600000 * 3).toISOString(),
         kioskMode: 'FULL_LOCKDOWN',
         enrollmentDate: '2025-09-02T10:17:00.000Z',
+        hardwareSecurity: {
+          playIntegrityPass: true,
+          deviceRooted: false,
+          developerOptionsDisabled: true,
+          usbDebuggingDisabled: true,
+        },
+      },
+      {
+        id: 'dev-pc-lab-101',
+        deviceId: 'WIN-LAB-PC01',
+        serialNumber: 'SN-WINLAB101X',
+        name: 'Computer Lab Workstation #01',
+        model: 'Dell OptiPlex 7090 Micro',
+        manufacturer: 'Dell Inc.',
+        platform: 'WINDOWS_PC',
+        osVersion: 'Windows 11 Pro (x64)',
+        agentVersion: '2.4.0',
+        managementMode: 'DEVICE_OWNER',
+        status: 'ONLINE',
+        isLocked: true,
+        schoolId: 'sch-demo-01',
+        schoolName: 'Demo International School',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        assignedStudentId: 'stu-pc-01',
+        assignedStudentName: 'Lab Station 01 User',
+        assignedStudentRoll: 'PC-LAB-01',
+        studentUsername: 'student.pc01',
+        defaultPassword: 'EG-3891P',
+        batteryLevel: 100,
+        isCharging: true,
+        networkType: 'WIFI',
+        wifiSsid: 'Campus-Secure-Gigabit',
+        ipAddress: '192.168.1.101',
+        macAddress: '00:1A:2B:C4:72:01',
+        storageTotalGb: 512.0,
+        storageUsedGb: 42.1,
+        ramTotalGb: 16.0,
+        ramUsedGb: 4.8,
+        policyId: 'pol-stem-v17',
+        policyVersion: 17,
+        policySyncedAt: new Date(Date.now() - 5 * 60000).toISOString(),
+        lastHeartbeat: new Date().toISOString(),
+        currentActiveApp: 'EduGuard Student Workspace Kiosk',
+        kioskMode: 'FULL_LOCKDOWN',
+        enrollmentDate: '2025-09-02T10:18:00.000Z',
+        hardwareSecurity: {
+          playIntegrityPass: true,
+          deviceRooted: false,
+          developerOptionsDisabled: true,
+          usbDebuggingDisabled: true,
+        },
+      },
+      {
+        id: 'dev-pc-lab-102',
+        deviceId: 'WIN-LAB-PC02',
+        serialNumber: 'SN-WINLAB102Y',
+        name: 'Computer Lab Workstation #02',
+        model: 'HP ProDesk 600 G6 Mini',
+        manufacturer: 'HP',
+        platform: 'WINDOWS_PC',
+        osVersion: 'Windows 11 Enterprise (x64)',
+        agentVersion: '2.4.0',
+        managementMode: 'DEVICE_OWNER',
+        status: 'ONLINE',
+        isLocked: true,
+        schoolId: 'sch-demo-01',
+        schoolName: 'Demo International School',
+        classId: 'cls-12-a',
+        className: 'Class XII-A',
+        assignedStudentId: 'stu-pc-02',
+        assignedStudentName: 'Lab Station 02 User',
+        assignedStudentRoll: 'PC-LAB-02',
+        studentUsername: 'student.pc02',
+        defaultPassword: 'EG-8420K',
+        batteryLevel: 100,
+        isCharging: true,
+        networkType: 'WIFI',
+        wifiSsid: 'Campus-Secure-Gigabit',
+        ipAddress: '192.168.1.102',
+        macAddress: '00:1A:2B:D8:19:02',
+        storageTotalGb: 512.0,
+        storageUsedGb: 48.6,
+        ramTotalGb: 16.0,
+        ramUsedGb: 5.1,
+        policyId: 'pol-stem-v17',
+        policyVersion: 17,
+        policySyncedAt: new Date(Date.now() - 3 * 60000).toISOString(),
+        lastHeartbeat: new Date().toISOString(),
+        currentActiveApp: 'EduGuard Student Workspace Kiosk',
+        kioskMode: 'FULL_LOCKDOWN',
+        enrollmentDate: '2025-09-02T10:19:00.000Z',
         hardwareSecurity: {
           playIntegrityPass: true,
           deviceRooted: false,

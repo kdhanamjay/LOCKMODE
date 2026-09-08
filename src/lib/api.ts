@@ -94,6 +94,9 @@ export const api = {
     ramTotalGb?: number;
     storageTotalGb?: number;
     ipAddress?: string;
+    macAddress?: string;
+    studentUsername?: string;
+    defaultPassword?: string;
   }) =>
     fetchJson<{
       device: Device;
@@ -103,6 +106,14 @@ export const api = {
       policy: DevicePolicy;
     }>('/devices/enroll', {
       method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateDeviceCredentials: async (
+    id: string,
+    data: { defaultPassword?: string; studentUsername?: string; macAddress?: string; name?: string }
+  ) =>
+    fetchJson<Device>(`/devices/${id}/password`, {
+      method: 'PUT',
       body: JSON.stringify(data),
     }),
   lockDevice: async (id: string, reason?: string) =>
@@ -149,6 +160,9 @@ export const api = {
     schoolId?: string;
     wifiSsid?: string;
     ipAddress?: string;
+    macAddress?: string;
+    studentUsername?: string;
+    defaultPassword?: string;
   }) =>
     fetchJson<{ acknowledged: boolean; device: Device; isLocked: boolean; isDeleted?: boolean }>('/devices/checkin', {
       method: 'POST',

@@ -2118,11 +2118,10 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                       setStudentExitPassword(e.target.value);
                       setExitRequestError(null);
                     }}
-                    placeholder="Enter student password (e.g. student123 or roll no)"
+                    placeholder="Enter station student password"
                     className="w-full p-3 bg-gray-950 border border-gray-700 rounded-xl text-white focus:border-rose-500 focus:outline-none font-mono"
                     autoFocus
                   />
-                  <p className="text-[10px] text-gray-500 mt-1">Default test password: <code className="text-gray-400">student123</code></p>
                 </div>
 
                 <div>
@@ -2163,7 +2162,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                   {showTeacherOverridePin && (
                     <div className="mt-2 p-3 bg-gray-950 border border-gray-800 rounded-xl space-y-2">
                       <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
-                        Teacher / Master Override PIN (Default: 2026)
+                        Teacher / Master Override PIN
                       </label>
                       <div className="flex space-x-2">
                         <input
@@ -2173,7 +2172,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                             setTeacherOverridePin(e.target.value);
                             setTeacherOverrideError(false);
                           }}
-                          placeholder="Master PIN (2026)"
+                          placeholder="Enter Master PIN"
                           className="flex-1 p-2 bg-gray-900 border border-gray-700 rounded-lg text-white font-mono text-xs focus:outline-none focus:border-blue-500"
                         />
                         <button
@@ -2185,7 +2184,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                         </button>
                       </div>
                       {teacherOverrideError && (
-                        <p className="text-[10px] text-rose-400 font-semibold">Invalid master PIN. Try 2026</p>
+                        <p className="text-[10px] text-rose-400 font-semibold">Invalid master PIN. Please check with your supervisor.</p>
                       )}
                     </div>
                   )}
@@ -2341,7 +2340,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
             <div>
               <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">
-                Enter PIN (Default: 2026)
+                Enter Administrator PIN
               </label>
               <input
                 type="password"
@@ -2355,7 +2354,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                 className="w-full p-3 bg-gray-950 border border-gray-700 rounded-2xl text-center font-mono text-lg text-white focus:outline-none focus:border-blue-500"
                 autoFocus
               />
-              {unlockError && <p className="text-xs text-rose-400 mt-1 font-semibold">Incorrect PIN. Try 2026</p>}
+              {unlockError && <p className="text-xs text-rose-400 mt-1 font-semibold">Incorrect PIN. Please contact system administrator.</p>}
             </div>
 
             <div className="flex space-x-2 pt-2">

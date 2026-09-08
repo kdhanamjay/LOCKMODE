@@ -1,7 +1,7 @@
 // EduGuard MDM — Comprehensive REST API Route Handlers
 
 import { Router, Response } from 'express';
-import { db } from './db';
+import { db, generateMacAddress, generateUniqueStationPassword } from './db';
 import { AuthenticatedRequest, sendSuccess, sendError, requireRole } from './auth';
 import { Device, RemoteCommand, PolicyViolation, AppUsageRecord, WebFilterRule } from '../src/types/mdm';
 
@@ -293,6 +293,11 @@ apiRouter.post('/devices/enroll', (req: AuthenticatedRequest, res: Response) => 
     device.assignedStudentId = student.id;
     device.assignedStudentName = student.name;
     device.assignedStudentRoll = student.rollNumber;
+    if (req.body.studentUsername) device.studentUsername = req.body.studentUsername;
+    if (req.body.macAddress) device.macAddress = req.body.macAddress;
+    if (!device.defaultPassword) device.defaultPassword = generateUniqueStationPassword('EG');
+    if (!device.macAddress) device.macAddress = generateMacAddress(device.deviceId);
+    if (!device.studentUsername) device.studentUsername = student.name ? student.name.toLowerCase().replace(/\s+/g, '.') : `stu.${device.deviceId.toLowerCase()}`;
     device.status = 'ONLINE';
     device.lastHeartbeat = new Date().toISOString();
     device.policyId = targetPolicy.id;
@@ -322,11 +327,14 @@ apiRouter.post('/devices/enroll', (req: AuthenticatedRequest, res: Response) => 
       assignedStudentId: student.id,
       assignedStudentName: student.name,
       assignedStudentRoll: student.rollNumber,
+      studentUsername: req.body.studentUsername || (student.name ? student.name.toLowerCase().replace(/\s+/g, '.') : `stu.${genDevId.toLowerCase().replace(/[^a-z0-9]/g, '')}`),
+      defaultPassword: req.body.defaultPassword || generateUniqueStationPassword('EG'),
       batteryLevel: batteryLevel ?? 100,
       isCharging: isCharging ?? true,
       networkType: 'WIFI',
       wifiSsid: 'School_Secure_WLAN',
       ipAddress: ipAddress || (req.ip === '::1' ? '192.168.1.105' : req.ip || '192.168.1.105'),
+      macAddress: req.body.macAddress || generateMacAddress(genDevId),
       storageTotalGb: storageTotalGb || 256,
       storageUsedGb: 32.4,
       ramTotalGb: ramTotalGb || 16,
@@ -467,6 +475,52 @@ apiRouter.delete('/devices/:id', (req: AuthenticatedRequest, res: Response) => {
   }, `Device ${deletedDevice.name} (${deletedDevice.deviceId}) deleted and unenrolled successfully.`);
 });
 
+apiRouter.put('/devices/:id/password', (req: AuthenticatedRequest, res: Response) => {
+  const deviceId = req.params.id;
+  const { defaultPassword, studentUsername, macAddress, name } = req.body;
+  const cleanId = String(deviceId).trim().toLowerCase();
+  const device = db.devices.find(
+    (d) =>
+      d.id === deviceId ||
+      d.deviceId === deviceId ||
+      d.id.toLowerCase() === cleanId ||
+      d.deviceId.toLowerCase() === cleanId
+  );
+
+  if (!device) {
+    return sendError(res, 404, 'NOT_FOUND', 'Device not found in system inventory.');
+  }
+
+  if (defaultPassword !== undefined) {
+    device.defaultPassword = String(defaultPassword).trim();
+  }
+  if (studentUsername !== undefined) {
+    device.studentUsername = String(studentUsername).trim();
+  }
+  if (macAddress !== undefined) {
+    device.macAddress = String(macAddress).trim();
+  }
+  if (name !== undefined) {
+    device.name = String(name).trim();
+  }
+
+  db.broadcast('device_update', device);
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-super-arvd',
+    adminName: req.user?.name || 'ARVD Exam Section Admin',
+    adminRole: req.user?.role || 'SUPER_ADMIN',
+    schoolId: device.schoolId,
+    action: 'DEVICE_CONFIG_UPDATED',
+    targetType: 'DEVICE',
+    targetId: device.deviceId,
+    targetDescription: `Updated enrollment credentials for ${device.name} (${device.deviceId}) - Set default unique password to ${device.defaultPassword}.`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  return sendSuccess(res, device, `Enrollment credentials updated for ${device.name}.`);
+});
+
 apiRouter.post('/devices/checkin', (req: AuthenticatedRequest, res: Response) => {
   const {
     deviceId,
@@ -520,6 +574,11 @@ apiRouter.post('/devices/checkin', (req: AuthenticatedRequest, res: Response) =>
     // Update live telemetry & read IP address
     device.ipAddress = cleanIp;
     device.lastHeartbeat = new Date().toISOString();
+    if (req.body.macAddress) device.macAddress = req.body.macAddress;
+    if (req.query?.mac_address) device.macAddress = String(req.query.mac_address);
+    if (!device.macAddress) device.macAddress = generateMacAddress(cleanDeviceId);
+    if (!device.defaultPassword) device.defaultPassword = generateUniqueStationPassword('EG');
+    if (!device.studentUsername) device.studentUsername = `student.${cleanDeviceId.replace(/[^a-z0-9]/g, '')}`;
     if (batteryLevel !== undefined) device.batteryLevel = batteryLevel;
     if (isCharging !== undefined) device.isCharging = isCharging;
     if (currentApp) device.currentActiveApp = currentApp;
@@ -565,11 +624,14 @@ apiRouter.post('/devices/checkin', (req: AuthenticatedRequest, res: Response) =>
     className: targetClass.name,
     assignedStudentName: assignedName,
     assignedStudentRoll: rollNumber,
+    studentUsername: req.body.studentUsername || `student.${cleanDeviceId.replace(/[^a-z0-9]/g, '')}`,
+    defaultPassword: req.body.defaultPassword || generateUniqueStationPassword('EG'),
     batteryLevel: batteryLevel ?? 100,
     isCharging: isCharging ?? true,
     networkType: 'WIFI',
     wifiSsid: wifiSsid || 'Campus-Secure-WLAN',
     ipAddress: cleanIp,
+    macAddress: req.body.macAddress || (req.query?.mac_address as string) || generateMacAddress(cleanDeviceId),
     storageTotalGb: 256,
     storageUsedGb: 34.2,
     ramTotalGb: 16,
@@ -1597,11 +1659,8 @@ apiRouter.post('/kiosk-exit-requests', (req: AuthenticatedRequest, res: Response
     return sendError(res, 400, 'VALIDATION_ERROR', 'Device ID and student password are required.');
   }
 
-  // Validate student password (allow standard student password e.g. student123, student roll, or any non-empty password)
   const cleanPass = String(studentPassword).trim();
-  const isValid = cleanPass.length >= 1;
-
-  if (!isValid) {
+  if (cleanPass.length < 1) {
     return sendError(res, 400, 'INVALID_PASSWORD', 'Please enter your student password.');
   }
 
@@ -1613,6 +1672,16 @@ apiRouter.post('/kiosk-exit-requests', (req: AuthenticatedRequest, res: Response
       d.deviceId.toLowerCase() === deviceId.toLowerCase()
   );
   const student = db.students.find((s) => s.id === studentId || s.name === studentName);
+
+  // Validate student password against device defaultPassword or student roll or admin override
+  const isMaster = cleanPass === '2026' || cleanPass === 'admin123' || cleanPass === 'arvdexamsection@gmail.com';
+  const matchesPassword = device?.defaultPassword && cleanPass.toLowerCase() === device.defaultPassword.toLowerCase();
+  const matchesRoll = (device?.assignedStudentRoll && cleanPass.toLowerCase() === device.assignedStudentRoll.toLowerCase()) ||
+                      (student?.rollNumber && cleanPass.toLowerCase() === student.rollNumber.toLowerCase());
+
+  if (device?.defaultPassword && !matchesPassword && !matchesRoll && !isMaster) {
+    return sendError(res, 401, 'INVALID_PASSWORD', 'Invalid station password for this device. Please check with your exam proctor or administrator.');
+  }
 
   // Remove any existing pending request for this device
   db.kioskExitRequests = db.kioskExitRequests.filter(
@@ -1930,11 +1999,25 @@ namespace EduGuardKiosk {
                 if (!isNew) return;
 
                 string machineId = "WIN-" + Environment.MachineName;
+                string macAddress = "";
+                try {
+                    foreach (System.Net.NetworkInformation.NetworkInterface nic in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()) {
+                        if (nic.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up && 
+                            nic.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback) {
+                            byte[] bytes = nic.GetPhysicalAddress().GetAddressBytes();
+                            if (bytes != null && bytes.Length == 6) {
+                                macAddress = string.Format("{0:X2}:{1:X2}:{2:X2}:{3:X2}:{4:X2}:{5:X2}", bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]);
+                                break;
+                            }
+                        }
+                    }
+                } catch {}
+
                 string url = "${studentKioskUrl}";
                 if (url.IndexOf("?") >= 0) {
-                    url += "&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName);
+                    url += "&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName) + "&mac_address=" + Uri.EscapeDataString(macAddress);
                 } else {
-                    url += "?student=true&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName);
+                    url += "?student=true&device_id=" + Uri.EscapeDataString(machineId) + "&device_name=" + Uri.EscapeDataString(Environment.MachineName) + "&mac_address=" + Uri.EscapeDataString(macAddress);
                 }
 
                 string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EduGuardKiosk", "BrowserProfile");
@@ -2259,7 +2342,17 @@ If Not fso.FolderExists(dataDir) Then\r
     fso.CreateFolder(dataDir)\r
 End If\r
 \r
-targetUrl = "${studentKioskUrl}&device_id=" & machineId & "&device_name=" & machineName\r
+macAddr = ""
+Set objWMIService = GetObject("winmgmts:\\\\.\\root\\cimv2")
+Set colAdapters = objWMIService.ExecQuery("SELECT MACAddress FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled = True")
+For Each objAdapter in colAdapters
+    If objAdapter.MACAddress <> "" Then
+        macAddr = objAdapter.MACAddress
+        Exit For
+    End If
+Next
+
+targetUrl = "${studentKioskUrl}&device_id=" & machineId & "&device_name=" & machineName & "&mac_address=" & macAddr\r
 \r
 browserExe = ""\r
 pf86 = WshShell.ExpandEnvironmentStrings("%ProgramFiles(x86)%")\r

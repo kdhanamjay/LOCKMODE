@@ -93,11 +93,14 @@ export interface Device {
   assignedStudentId?: string;
   assignedStudentName?: string;
   assignedStudentRoll?: string;
+  studentUsername?: string;
+  defaultPassword?: string;
   batteryLevel: number;
   isCharging: boolean;
   networkType: 'WIFI' | 'CELLULAR' | 'NONE';
   wifiSsid?: string;
   ipAddress?: string;
+  macAddress?: string;
   storageTotalGb: number;
   storageUsedGb: number;
   ramTotalGb: number;

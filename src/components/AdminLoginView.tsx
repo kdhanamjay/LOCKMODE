@@ -153,7 +153,6 @@ export const AdminLoginView: React.FC<AdminLoginViewProps> = ({ onLoginSuccess, 
                 <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider">
                   Master Security Password
                 </label>
-                <span className="text-[10px] text-gray-400">Default: EduGuardSecure2026!</span>
               </div>
               <div className="relative">
                 <input
