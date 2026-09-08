@@ -576,161 +576,224 @@ pause
 
   // Silent VBScript 1-Click Launcher (No compilation required, runs silently)
   const vbsLauncherContent = `' EduGuard MDM - Silent Windowless Student Kiosk Launcher (VBScript)
+On Error Resume Next
 Set WshShell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set WshNetwork = CreateObject("WScript.Network")
 
-dataDir = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%\\EduGuardKiosk\\BrowserProfile")
+machineName = WshNetwork.ComputerName
+machineId = "WIN-" & machineName
+appData = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%")
+dataBaseDir = appData & "\\EduGuardKiosk"
+dataDir = dataBaseDir & "\\BrowserProfile"
+
+If Not fso.FolderExists(dataBaseDir) Then
+    fso.CreateFolder(dataBaseDir)
+End If
 If Not fso.FolderExists(dataDir) Then
-    On Error Resume Next
-    fso.CreateFolder(WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%\\EduGuardKiosk"))
     fso.CreateFolder(dataDir)
-    On Error Goto 0
 End If
 
-browserExe = "msedge.exe"
+' Detect physical MAC address safely via WMI
+macAddr = ""
+Set objWMIService = GetObject("winmgmts:\\\\.\\root\\cimv2")
+If Err.Number = 0 And Not objWMIService Is Nothing Then
+    Set colAdapters = objWMIService.ExecQuery("SELECT MACAddress FROM Win32_NetworkAdapterConfiguration WHERE IPEnabled = True")
+    If Err.Number = 0 And Not colAdapters Is Nothing Then
+        For Each objAdapter in colAdapters
+            If objAdapter.MACAddress <> "" Then
+                macAddr = objAdapter.MACAddress
+                Exit For
+            End If
+        Next
+    End If
+End If
+Err.Clear
+
+' Locate Microsoft Edge or Google Chrome executable
+browserExe = ""
 pf86 = WshShell.ExpandEnvironmentStrings("%ProgramFiles(x86)%")
 pf = WshShell.ExpandEnvironmentStrings("%ProgramFiles%")
 
 If fso.FileExists(pf86 & "\\Microsoft\\Edge\\Application\\msedge.exe") Then
-    browserExe = """" & pf86 & "\\Microsoft\\Edge\\Application\\msedge.exe"""
+    browserExe = pf86 & "\\Microsoft\\Edge\\Application\\msedge.exe"
 ElseIf fso.FileExists(pf & "\\Microsoft\\Edge\\Application\\msedge.exe") Then
-    browserExe = """" & pf & "\\Microsoft\\Edge\\Application\\msedge.exe"""
+    browserExe = pf & "\\Microsoft\\Edge\\Application\\msedge.exe"
+ElseIf fso.FileExists(appData & "\\Microsoft\\Edge\\Application\\msedge.exe") Then
+    browserExe = appData & "\\Microsoft\\Edge\\Application\\msedge.exe"
 ElseIf fso.FileExists(pf & "\\Google\\Chrome\\Application\\chrome.exe") Then
-    browserExe = """" & pf & "\\Google\\Chrome\\Application\\chrome.exe"""
+    browserExe = pf & "\\Google\\Chrome\\Application\\chrome.exe"
+ElseIf fso.FileExists(pf86 & "\\Google\\Chrome\\Application\\chrome.exe") Then
+    browserExe = pf86 & "\\Google\\Chrome\\Application\\chrome.exe"
+Else
+    browserExe = "msedge.exe"
 End If
 
-machineId = "WIN-" & WshNetwork.ComputerName
-kioskUrl = "${studentKioskUrl}&device_id=" & machineId & "&device_name=" & WshNetwork.ComputerName
-kioskArgs = " --kiosk """ & kioskUrl & """ --edge-kiosk-type=fullscreen --user-data-dir=""" & dataDir & """ --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing"
+kioskUrl = "${studentKioskUrl}&device_id=" & machineId & "&device_name=" & machineName & "&mac_address=" & macAddr
+kioskArgs = " --new-window --kiosk """ & kioskUrl & """ --edge-kiosk-type=fullscreen --user-data-dir=""" & dataDir & """ --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing"
 
-' Write and launch Low-Level Keyboard Blocker (Disables Alt+Tab, Alt+Esc, Win Keys at Windows OS level)
-keyBlockerPs1 = WshShell.ExpandEnvironmentStrings("%LOCALAPPDATA%\\EduGuardKiosk\\EduGuard-KeyBlocker.ps1")
-Set psFile = fso.CreateTextFile(keyBlockerPs1, True)
-psFile.WriteLine "$host.UI.RawUI.WindowTitle = 'EduGuard-KeyBlocker'"
-psFile.WriteLine "$code = @'"
-psFile.WriteLine "using System;"
-psFile.WriteLine "using System.Diagnostics;"
-psFile.WriteLine "using System.Runtime.InteropServices;"
-psFile.WriteLine "using System.Windows.Forms;"
-psFile.WriteLine "public class KeyBlocker {"
-psFile.WriteLine "    private const int WH_KEYBOARD_LL = 13;"
-psFile.WriteLine "    private const int WM_KEYDOWN = 0x0100;"
-psFile.WriteLine "    private const int WM_KEYUP = 0x0101;"
-psFile.WriteLine "    private const int WM_SYSKEYDOWN = 0x0104;"
-psFile.WriteLine "    private const int WM_SYSKEYUP = 0x0105;"
-psFile.WriteLine "    private const int VK_TAB = 0x09;"
-psFile.WriteLine "    private const int VK_ESCAPE = 0x1B;"
-psFile.WriteLine "    private const int VK_LWIN = 0x5B;"
-psFile.WriteLine "    private const int VK_RWIN = 0x5C;"
-psFile.WriteLine "    private const int VK_SPACE = 0x20;"
-psFile.WriteLine "    private const int VK_F4 = 0x73;"
-psFile.WriteLine "    private const int LLKHF_ALTDOWN = 0x20;"
-psFile.WriteLine "    [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo; }"
-psFile.WriteLine "    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);"
-psFile.WriteLine "    private static HookProc _proc = Callback;"
-psFile.WriteLine "    private static IntPtr _h = IntPtr.Zero;"
-psFile.WriteLine "    public static void Start() {"
-psFile.WriteLine "        IntPtr hMod = GetModuleHandle(IntPtr.Zero);"
-psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hMod, 0);"
-psFile.WriteLine "        Application.Run();"
-psFile.WriteLine "    }"
-psFile.WriteLine "    private static IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam) {"
-psFile.WriteLine "        if (nCode >= 0) {"
-psFile.WriteLine "            int msg = (int)wParam;"
-psFile.WriteLine "            if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP) {"
-psFile.WriteLine "                KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"
-psFile.WriteLine "                bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"
-psFile.WriteLine "                // 1. Physically Block Alt+Tab and Shift+Alt+Tab"
-psFile.WriteLine "                if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1;"
-psFile.WriteLine "                // 2. Physically Block Alt+Esc and Alt+Space (system window menus)"
-psFile.WriteLine "                if (isAlt && (k.vkCode == VK_ESCAPE || k.vkCode == VK_SPACE)) return (IntPtr)1;"
-psFile.WriteLine "                // 3. Physically Block Alt+F4 window close attempt"
-psFile.WriteLine "                if (isAlt && k.vkCode == VK_F4) return (IntPtr)1;"
-psFile.WriteLine "                // 4. Physically Block Windows Left and Right keys"
-psFile.WriteLine "                if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1;"
-psFile.WriteLine "                // 5. Physically Block Ctrl+Esc (Start menu toggle)"
-psFile.WriteLine "                if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;"
-psFile.WriteLine "            }"
-psFile.WriteLine "        }"
-psFile.WriteLine "        return CallNextHookEx(_h, nCode, wParam, lParam);"
-psFile.WriteLine "    }"
-psFile.WriteLine "    [DllImport(""user32.dll"", SetLastError = true)] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"
-psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr CallNextHookEx(IntPtr h, int c, IntPtr w, IntPtr l);"
-psFile.WriteLine "    [DllImport(""kernel32.dll"", CharSet = CharSet.Auto, SetLastError = true)] private static extern IntPtr GetModuleHandle(IntPtr m);"
-psFile.WriteLine "}"
-psFile.WriteLine "'@"
-psFile.WriteLine "Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms"
-psFile.WriteLine "[KeyBlocker]::Start()"
-psFile.Close
+If InStr(browserExe, " ") > 0 Then
+    cmdToRun = """" & browserExe & """" & kioskArgs
+Else
+    cmdToRun = browserExe & kioskArgs
+End If
 
-' Launch KeyBlocker silently in background (0 = completely hidden window)
+' Write and launch Low-Level Keyboard Blocker safely (without locking errors)
+keyBlockerPs1 = dataBaseDir & "\\EduGuard-KeyBlocker.ps1"
+If Not fso.FileExists(keyBlockerPs1) Then
+    Set psFile = fso.CreateTextFile(keyBlockerPs1, True)
+    If Err.Number = 0 And Not psFile Is Nothing Then
+        psFile.WriteLine "$host.UI.RawUI.WindowTitle = 'EduGuard-KeyBlocker'"
+        psFile.WriteLine "$code = @'"
+        psFile.WriteLine "using System;"
+        psFile.WriteLine "using System.Diagnostics;"
+        psFile.WriteLine "using System.Runtime.InteropServices;"
+        psFile.WriteLine "using System.Windows.Forms;"
+        psFile.WriteLine "public class KeyBlocker {"
+        psFile.WriteLine "    private const int WH_KEYBOARD_LL = 13;"
+        psFile.WriteLine "    private const int WM_KEYDOWN = 0x0100;"
+        psFile.WriteLine "    private const int WM_KEYUP = 0x0101;"
+        psFile.WriteLine "    private const int WM_SYSKEYDOWN = 0x0104;"
+        psFile.WriteLine "    private const int WM_SYSKEYUP = 0x0105;"
+        psFile.WriteLine "    private const int VK_TAB = 0x09;"
+        psFile.WriteLine "    private const int VK_ESCAPE = 0x1B;"
+        psFile.WriteLine "    private const int VK_LWIN = 0x5B;"
+        psFile.WriteLine "    private const int VK_RWIN = 0x5C;"
+        psFile.WriteLine "    private const int VK_SPACE = 0x20;"
+        psFile.WriteLine "    private const int VK_F4 = 0x73;"
+        psFile.WriteLine "    private const int LLKHF_ALTDOWN = 0x20;"
+        psFile.WriteLine "    [StructLayout(LayoutKind.Sequential)] private struct KBDLLHOOKSTRUCT { public int vkCode; public int scanCode; public int flags; public int time; public IntPtr dwExtraInfo; }"
+        psFile.WriteLine "    private delegate IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam);"
+        psFile.WriteLine "    private static HookProc _proc = Callback;"
+        psFile.WriteLine "    private static IntPtr _h = IntPtr.Zero;"
+        psFile.WriteLine "    public static void Start() {"
+        psFile.WriteLine "        IntPtr hMod = GetModuleHandle(IntPtr.Zero);"
+        psFile.WriteLine "        _h = SetWindowsHookEx(WH_KEYBOARD_LL, _proc, hMod, 0);"
+        psFile.WriteLine "        Application.Run();"
+        psFile.WriteLine "    }"
+        psFile.WriteLine "    private static IntPtr Callback(int nCode, IntPtr wParam, IntPtr lParam) {"
+        psFile.WriteLine "        if (nCode >= 0) {"
+        psFile.WriteLine "            int msg = (int)wParam;"
+        psFile.WriteLine "            if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP || msg == WM_SYSKEYUP) {"
+        psFile.WriteLine "                KBDLLHOOKSTRUCT k = (KBDLLHOOKSTRUCT)Marshal.PtrToStructure(lParam, typeof(KBDLLHOOKSTRUCT));"
+        psFile.WriteLine "                bool isAlt = (k.flags & LLKHF_ALTDOWN) != 0;"
+        psFile.WriteLine "                if (isAlt && k.vkCode == VK_TAB) return (IntPtr)1;"
+        psFile.WriteLine "                if (isAlt && (k.vkCode == VK_ESCAPE || k.vkCode == VK_SPACE)) return (IntPtr)1;"
+        psFile.WriteLine "                if (isAlt && k.vkCode == VK_F4) return (IntPtr)1;"
+        psFile.WriteLine "                if (k.vkCode == VK_LWIN || k.vkCode == VK_RWIN) return (IntPtr)1;"
+        psFile.WriteLine "                if (k.vkCode == VK_ESCAPE && (Control.ModifierKeys & Keys.Control) != 0) return (IntPtr)1;"
+        psFile.WriteLine "            }"
+        psFile.WriteLine "        }"
+        psFile.WriteLine "        return CallNextHookEx(_h, nCode, wParam, lParam);"
+        psFile.WriteLine "    }"
+        psFile.WriteLine "    [DllImport(""user32.dll"", SetLastError = true)] private static extern IntPtr SetWindowsHookEx(int id, HookProc lp, IntPtr mod, uint th);"
+        psFile.WriteLine "    [DllImport(""user32.dll"")] private static extern IntPtr CallNextHookEx(IntPtr h, int c, IntPtr w, IntPtr l);"
+        psFile.WriteLine "    [DllImport(""kernel32.dll"", CharSet = CharSet.Auto, SetLastError = true)] private static extern IntPtr GetModuleHandle(IntPtr m);"
+        psFile.WriteLine "}"
+        psFile.WriteLine "'@"
+        psFile.WriteLine "Add-Type -TypeDefinition $code -ReferencedAssemblies System.Windows.Forms"
+        psFile.WriteLine "[KeyBlocker]::Start()"
+        psFile.Close
+    End If
+    Err.Clear
+End If
+
+' Safely launch KeyBlocker silently in background (safely ignored if blocked by system policy)
 WshShell.Run "powershell.exe -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & keyBlockerPs1 & """", 0, False
+Err.Clear
 
-' Launch kiosk initially (False = non-blocking so VBScript actively monitors in background)
-WshShell.Run browserExe & kioskArgs, 1, False
+' Launch kiosk with multi-tier fail-safe execution
+Dim runRes
+runRes = WshShell.Run(cmdToRun, 1, False)
+If Err.Number <> 0 Or runRes <> 0 Then
+    Err.Clear
+    WshShell.Run "msedge.exe" & kioskArgs, 1, False
+End If
+If Err.Number <> 0 Then
+    Err.Clear
+    WshShell.Run "chrome.exe" & kioskArgs, 1, False
+End If
+If Err.Number <> 0 Then
+    Err.Clear
+    WshShell.Run "explorer.exe """ & kioskUrl & """", 1, False
+End If
+Err.Clear
 
 Do While True
-    WScript.Sleep 2000
+    WScript.Sleep 3000
 
     ' 1. Check if Administrator unlocked or removed workstation
     On Error Resume Next
+    Dim http
     Set http = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-    http.Open "GET", "${currentAppUrl}/api/devices/" & machineId & "/kiosk-status", False
-    http.Send
-    If http.Status = 200 Then
-        Dim resp
-        resp = http.responseText
-        If InStr(resp, """isDeleted"":true") > 0 Then
-            ' Workstation deleted by admin: terminate kiosk browser and quit
-            WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
-            WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
-            WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True
-            WScript.Sleep 500
-            WshShell.Run "taskkill /f /im msedge.exe", 0, True
-            WScript.Quit 0
-        End If
-        If InStr(resp, """isLocked"":false") > 0 Or InStr(resp, """kioskActive"":false") > 0 Then
-            ' WORKSTATION UNLOCKED / APPROVED BY ADMINISTRATOR!
-            ' Terminate all kiosk windows & key blocker immediately to restore clean Windows Desktop!
-            WshShell.Run "taskkill /f /im msedge.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
-            WshShell.Run "taskkill /f /im chrome.exe /fi ""WINDOWTITLE eq EduGuard*""", 0, True
-            WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True
-            WScript.Sleep 500
-            WshShell.Run "taskkill /f /im msedge.exe", 0, True
-            
-            ' Silent idle standby: if Admin ever sends "Lock Device" from Admin Console, auto-lock PC again!
-            Do While True
-                WScript.Sleep 3000
-                Set httpIdle = CreateObject("MSXML2.ServerXMLHTTP.6.0")
-                httpIdle.Open "GET", "${currentAppUrl}/api/devices/" & machineId & "/kiosk-status", False
-                httpIdle.Send
-                If httpIdle.Status = 200 Then
-                    Dim idleResp
-                    idleResp = httpIdle.responseText
-                    If InStr(idleResp, """isDeleted"":true") > 0 Then WScript.Quit 0
-                    If InStr(idleResp, """isLocked"":true") > 0 And InStr(idleResp, """kioskActive"":true") > 0 Then
-                        ' Admin dispatched Remote Lock! Relaunch key blocker and kiosk immediately!
-                        WshShell.Run "powershell.exe -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & keyBlockerPs1 & """", 0, False
-                        Exit Do
-                    End If
-                End If
-            Loop
-            ' Re-launch kiosk after admin locked
-            WshShell.Run browserExe & kioskArgs, 1, False
-        End If
-    ElseIf http.Status = 404 Then
-        WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True
-        WshShell.Run "taskkill /f /im msedge.exe", 0, True
-        WScript.Quit 0
+    If Err.Number <> 0 Or http Is Nothing Then
+        Err.Clear
+        Set http = CreateObject("MSXML2.XMLHTTP")
     End If
-    On Error Goto 0
+    If Err.Number <> 0 Or http Is Nothing Then
+        Err.Clear
+        Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
+    End If
+
+    If Not http Is Nothing Then
+        http.Open "GET", "${currentAppUrl}/api/devices/" & machineId & "/kiosk-status", False
+        http.Send
+        If Err.Number = 0 And http.Status = 200 Then
+            Dim resp
+            resp = http.responseText
+            If InStr(resp, """isDeleted"":true") > 0 Then
+                ' Workstation deleted by admin: terminate kiosk browser and quit
+                WshShell.Run "taskkill /f /im msedge.exe", 0, True
+                WshShell.Run "taskkill /f /im chrome.exe", 0, True
+                WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True
+                WScript.Quit 0
+            End If
+            If InStr(resp, """isLocked"":false") > 0 Or InStr(resp, """kioskActive"":false") > 0 Then
+                ' WORKSTATION UNLOCKED / APPROVED BY ADMINISTRATOR!
+                WshShell.Run "taskkill /f /im msedge.exe", 0, True
+                WshShell.Run "taskkill /f /im chrome.exe", 0, True
+                WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True
+                
+                ' Silent idle standby: if Admin sends Remote Lock, lock PC again!
+                Do While True
+                    WScript.Sleep 3000
+                    Dim httpIdle
+                    Set httpIdle = CreateObject("MSXML2.ServerXMLHTTP.6.0")
+                    If Err.Number <> 0 Or httpIdle Is Nothing Then
+                        Err.Clear
+                        Set httpIdle = CreateObject("MSXML2.XMLHTTP")
+                    End If
+                    httpIdle.Open "GET", "${currentAppUrl}/api/devices/" & machineId & "/kiosk-status", False
+                    httpIdle.Send
+                    If Err.Number = 0 And httpIdle.Status = 200 Then
+                        Dim idleResp
+                        idleResp = httpIdle.responseText
+                        If InStr(idleResp, """isDeleted"":true") > 0 Then WScript.Quit 0
+                        If InStr(idleResp, """isLocked"":true") > 0 And InStr(idleResp, """kioskActive"":true") > 0 Then
+                            ' Admin dispatched Remote Lock! Relaunch key blocker and kiosk immediately!
+                            WshShell.Run "powershell.exe -NoProfile -STA -WindowStyle Hidden -ExecutionPolicy Bypass -File """ & keyBlockerPs1 & """", 0, False
+                            Exit Do
+                        End If
+                    End If
+                    Err.Clear
+                Loop
+                ' Re-launch kiosk after admin locked
+                WshShell.Run cmdToRun, 1, False
+            End If
+        End If
+    End If
+    ' CRITICAL: NEVER terminate on 404, 500, or network offline!
+    Err.Clear
 
     ' 2. Anti-tamper watchdog: If browser closed or crashed while workstation is STILL LOCKED, relaunch it!
+    Dim edgeProcs
     Set edgeProcs = GetObject("winmgmts:").ExecQuery("Select ProcessId from Win32_Process Where Name = 'msedge.exe' or Name = 'chrome.exe'")
-    If edgeProcs.Count = 0 Then
-        WshShell.Run browserExe & kioskArgs, 1, False
+    If Err.Number = 0 And Not edgeProcs Is Nothing Then
+        If edgeProcs.Count = 0 Then
+            WshShell.Run cmdToRun, 1, False
+        End If
     End If
+    Err.Clear
 Loop
 `;
 
