@@ -412,30 +412,47 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     localStorage.setItem('eduguard_student_notes', text);
   };
 
-  // Comprehensive Keyboard & DevTools & ALT+F4 & Windows OS Tab Switching Lockdown Interceptor
-  useEffect(() => {
-    // Engage Chromium / Edge Fullscreen Keyboard Lock API (Locks Tab, Escape, Alt, Meta at browser engine level)
-    const engageKeyboardLock = async () => {
+  // Engage Chromium / Edge Fullscreen Keyboard Lock API (Locks Tab, Alt+Tab, Escape, Meta at browser engine level)
+  const engageKeyboardLock = async () => {
+    try {
+      if ('keyboard' in navigator && (navigator as any).keyboard?.lock) {
+        await (navigator as any).keyboard.lock([
+          'Tab',
+          'Escape',
+          'AltLeft',
+          'AltRight',
+          'MetaLeft',
+          'MetaRight',
+          'KeyW',
+          'KeyQ',
+          'KeyN',
+          'KeyT',
+          'F1',
+          'F2',
+          'F3',
+          'F4',
+          'F5',
+          'F6',
+          'F7',
+          'F8',
+          'F9',
+          'F10',
+          'F11',
+          'F12',
+          'ContextMenu',
+        ]);
+      }
+    } catch {
       try {
         if ('keyboard' in navigator && (navigator as any).keyboard?.lock) {
-          await (navigator as any).keyboard.lock([
-            'Tab',
-            'Escape',
-            'AltLeft',
-            'AltRight',
-            'MetaLeft',
-            'MetaRight',
-            'KeyW',
-            'KeyQ',
-            'F11',
-            'F5'
-          ]);
+          await (navigator as any).keyboard.lock();
         }
-      } catch {
-        // Keyboard lock requires fullscreen or browser permission
-      }
-    };
+      } catch {}
+    }
+  };
 
+  // Comprehensive Keyboard & DevTools & ALT+F4 & Windows OS Tab Switching Lockdown Interceptor
+  useEffect(() => {
     if (!isRemotelyUnlocked) {
       engageKeyboardLock();
     }
@@ -508,7 +525,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         if (isAltTab || isCtrlTab || isCtrlPageNav || isCtrlNumberTab || isMetaWinKey) {
           triggerAlertSound();
           setTabSwitchCount((prev) => prev + 1);
-          setViolationToast('🚫 Tab Switching Blocked: Switching windows or tabs in Windows OS is prohibited in Kiosk Mode!');
+          setIsTabSwitchViolationActive(true);
+          setViolationToast('🚫 Tab Switching Blocked: Switching windows or tabs is disabled while device is locked!');
           // Transmit violation alert
           api.simulatorViolation({
             deviceId: currentDevice.id || currentDevice.deviceId,
@@ -529,9 +547,9 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       }
     };
 
-    // 6. Tab Visibility Change (detect tab switch when student moves away)
+    // 6. Tab Visibility Change (detect tab switch immediately when student moves away)
     const handleVisibilityChange = () => {
-      if (isFullscreenTransitioningRef.current) return;
+      if (isRemotelyUnlocked) return;
       if (document.hidden || document.visibilityState === 'hidden') {
         try {
           window.focus();
@@ -550,24 +568,24 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           return next;
         });
         setIsTabSwitchViolationActive(true);
+        setViolationToast('🚫 Tab Switching Blocked: Switching windows or tabs is prohibited in Kiosk Mode!');
+        setTimeout(() => setViolationToast(null), 3500);
       }
     };
 
     // 7. Window Blur (detect loss of window focus in Windows OS)
     const handleWindowBlur = () => {
-      // If user is toggling fullscreen or OS is performing window resize handshake, suppress false positive
-      if (isFullscreenTransitioningRef.current) return;
-
+      if (isRemotelyUnlocked) return;
       // Immediately pull window focus back so student cannot switch out
       try {
         window.focus();
         document.body.focus();
       } catch {}
 
-      // Debounce check to verify if focus was truly lost
+      // Immediate check if document lost focus
       setTimeout(() => {
-        if (isFullscreenTransitioningRef.current) return;
-        if (!document.hasFocus()) {
+        if (isRemotelyUnlocked) return;
+        if (!document.hasFocus() || document.hidden) {
           try {
             window.focus();
             document.body.focus();
@@ -585,8 +603,10 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
             return next;
           });
           setIsTabSwitchViolationActive(true);
+          setViolationToast('🚫 Window Switching Blocked: Switching between applications is disabled on this locked device!');
+          setTimeout(() => setViolationToast(null), 3500);
         }
-      }, 300);
+      }, 100);
     };
 
     // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
@@ -606,14 +626,30 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       setTimeout(() => setViolationToast(null), 3000);
     };
 
-    // 10. Handle fullscreen changes smoothly (e.g. user or script changes state)
+    // 10. Handle fullscreen changes: immediately engage keyboard lock upon entering fullscreen
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-      // Briefly maintain the guard window until layout settles
-      isFullscreenTransitioningRef.current = true;
-      setTimeout(() => {
-        isFullscreenTransitioningRef.current = false;
-      }, 1000);
+      const isNowFull = !!document.fullscreenElement;
+      setIsFullscreen(isNowFull);
+      if (isNowFull) {
+        engageKeyboardLock();
+        try {
+          window.focus();
+          document.body.focus();
+        } catch {}
+      } else if (!isRemotelyUnlocked) {
+        // Exited fullscreen while device locked: immediately alert and enforce
+        triggerAlertSound();
+        setTabSwitchCount((prev) => prev + 1);
+        setIsTabSwitchViolationActive(true);
+        setViolationToast('⚠️ Fullscreen Breach Blocked: Fullscreen must remain active while device is locked.');
+        api.simulatorViolation({
+          deviceId: currentDevice.id || currentDevice.deviceId,
+          type: 'FULLSCREEN_EXIT_ATTEMPT',
+          severity: 'HIGH',
+          targetResource: 'Fullscreen Lockdown Escape',
+          description: `Student exited fullscreen during active security lockdown`,
+        }).catch(() => {});
+      }
     };
 
     if (!isRemotelyUnlocked) {
@@ -664,6 +700,24 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     setAdminLockReason(msg);
     setCurrentDevice((prev) => ({ ...prev, isLocked: true, status: 'LOCKED', lockReason: msg }));
     triggerAlertSound();
+
+    // Immediately enforce fullscreen & lock keyboard switching
+    try {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen()
+          .then(() => {
+            setIsFullscreen(true);
+            engageKeyboardLock();
+          })
+          .catch(() => {
+            engageKeyboardLock();
+          });
+      } else {
+        engageKeyboardLock();
+      }
+    } catch {
+      engageKeyboardLock();
+    }
   };
 
   const handleRemoteUnlock = (reason?: string) => {
@@ -673,6 +727,13 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     setRemoteUnlockReason(reason || 'Administrator unlocked this workstation from Admin Console.');
     setCurrentDevice((prev) => ({ ...prev, isLocked: false, status: 'ONLINE', lockReason: undefined }));
     playUnlockSuccessSound();
+
+    // Release keyboard lock
+    try {
+      if ('keyboard' in navigator && (navigator as any).keyboard?.unlock) {
+        (navigator as any).keyboard.unlock();
+      }
+    } catch {}
 
     // Auto-attempt window.close after 2s
     setTimeout(() => {
@@ -1086,39 +1147,44 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     }
   };
 
-  // Fullscreen toggle (protected with transition lock to prevent false-positive window blur or switching violations)
-  const toggleFullscreen = () => {
-    isFullscreenTransitioningRef.current = true;
+  // Fullscreen toggle: strictly locks keyboard and disables exiting if device is locked
+  const toggleFullscreen = async () => {
     if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+        setIsFullscreen(true);
+        await engageKeyboardLock();
+        try {
+          window.focus();
+          document.body.focus();
+        } catch {}
+      } catch (err) {
+        console.warn('Fullscreen request failed:', err);
+      }
+    } else {
+      if (!isRemotelyUnlocked) {
+        setViolationToast('🚫 Switching & Exiting Fullscreen is Prohibited while device is locked.');
+        triggerAlertSound();
+        await engageKeyboardLock();
+        setTimeout(() => setViolationToast(null), 3000);
+        return;
+      }
+      try {
+        await document.exitFullscreen();
+        setIsFullscreen(false);
+      } catch (err) {}
+    }
+  };
+
+  // Immediate full screen & lock engagement on user click when device is locked
+  const handleContainerClick = () => {
+    if (!isRemotelyUnlocked && !document.fullscreenElement) {
       document.documentElement.requestFullscreen()
         .then(() => {
           setIsFullscreen(true);
-          try {
-            window.focus();
-            document.body.focus();
-          } catch {}
+          engageKeyboardLock();
         })
-        .catch(() => {})
-        .finally(() => {
-          setTimeout(() => {
-            isFullscreenTransitioningRef.current = false;
-          }, 1000);
-        });
-    } else {
-      document.exitFullscreen()
-        .then(() => {
-          setIsFullscreen(false);
-          try {
-            window.focus();
-            document.body.focus();
-          } catch {}
-        })
-        .catch(() => {})
-        .finally(() => {
-          setTimeout(() => {
-            isFullscreenTransitioningRef.current = false;
-          }, 1000);
-        });
+        .catch(() => {});
     }
   };
 
@@ -1180,6 +1246,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
   return (
     <div
+      onClick={handleContainerClick}
       onContextMenu={(e) => {
         e.preventDefault();
         setViolationToast('🚫 Right-click context menu is disabled in EduGuard Student Kiosk.');
@@ -1278,13 +1345,28 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
             )}
           </button>
 
-          {/* Fullscreen Button */}
+          {/* Fullscreen & Switching Lockdown Indicator / Button */}
+          {!isFullscreen && !isRemotelyUnlocked && (
+            <button
+              onClick={toggleFullscreen}
+              className="flex items-center space-x-1.5 px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold shadow-md shadow-rose-600/30 cursor-pointer animate-pulse"
+              title="Activate Fullscreen & Lock Tab/Window Switching"
+            >
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Lock Fullscreen</span>
+            </button>
+          )}
+
           <button
             onClick={toggleFullscreen}
-            className="p-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg cursor-pointer"
-            title="Toggle Fullscreen"
+            className={`p-1.5 rounded-lg cursor-pointer transition-colors ${
+              isFullscreen
+                ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30 hover:bg-blue-600/30'
+                : 'bg-gray-800 hover:bg-gray-700 text-gray-300'
+            }`}
+            title={isFullscreen ? 'Fullscreen Active (Switching Disabled)' : 'Enter Fullscreen & Lock Switching'}
           >
-            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+            {isFullscreen ? <Minimize2 className="w-3.5 h-3.5 text-blue-400" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
 
           {/* Student Request Exit / Logout Button */}
@@ -1949,11 +2031,23 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
             <button
               onClick={() => {
                 setIsTabSwitchViolationActive(false);
-                // Re-enforce fullscreen
+                // Re-enforce fullscreen & keyboard lock
                 if (!document.fullscreenElement) {
-                  document.documentElement.requestFullscreen().catch(() => {});
-                  setIsFullscreen(true);
+                  document.documentElement.requestFullscreen()
+                    .then(() => {
+                      setIsFullscreen(true);
+                      engageKeyboardLock();
+                    })
+                    .catch(() => {
+                      engageKeyboardLock();
+                    });
+                } else {
+                  engageKeyboardLock();
                 }
+                try {
+                  window.focus();
+                  document.body.focus();
+                } catch {}
               }}
               className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl font-bold text-xs shadow-lg shadow-rose-600/30 cursor-pointer transition-all flex items-center justify-center space-x-2"
             >
