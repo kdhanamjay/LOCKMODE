@@ -24,8 +24,12 @@ import {
   User,
   AlertCircle,
   ExternalLink,
+  Video,
+  Music,
+  Image as ImageIcon,
+  Play,
 } from 'lucide-react';
-import { StudyMaterial, SchoolClass, AdminUser } from '../types/mdm';
+import { StudyMaterial, SchoolClass, AdminUser, StudyMaterialType } from '../types/mdm';
 
 interface StudyMaterialsViewProps {
   materials: StudyMaterial[];
@@ -66,10 +70,10 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
   const [uploadClassId, setUploadClassId] = useState<string>(classes[0]?.id || 'cls-12-a');
   const [uploadSubject, setUploadSubject] = useState('Mathematics');
   const [uploadChapter, setUploadChapter] = useState('');
-  const [uploadType, setUploadType] = useState<'PDF' | 'RICH_NOTE'>('PDF');
+  const [uploadType, setUploadType] = useState<StudyMaterialType>('PDF');
   const [uploadContentMarkdown, setUploadContentMarkdown] = useState('');
-  const [selectedPdfFile, setSelectedPdfFile] = useState<File | null>(null);
-  const [pdfDataUrl, setPdfDataUrl] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileDataUrl, setFileDataUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -99,28 +103,83 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
     return matchesClass && matchesSubject && matchesSearch;
   });
 
+  const detectFileType = (file: File): StudyMaterialType => {
+    const name = file.name.toLowerCase();
+    const mime = file.type.toLowerCase();
+    if (mime.startsWith('video/') || ['.mp4', '.webm', '.ogg', '.mov', '.mkv'].some((ext) => name.endsWith(ext))) {
+      return 'VIDEO';
+    }
+    if (mime.startsWith('audio/') || ['.mp3', '.wav', '.ogg', '.m4a', '.aac'].some((ext) => name.endsWith(ext))) {
+      return 'AUDIO';
+    }
+    if (mime.startsWith('image/') || ['.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif'].some((ext) => name.endsWith(ext))) {
+      return 'IMAGE';
+    }
+    if (mime.includes('pdf') || name.endsWith('.pdf')) {
+      return 'PDF';
+    }
+    return 'DOCUMENT';
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type !== 'application/pdf' && !file.name.endsWith('.pdf')) {
-      setErrorMsg('Please select a valid PDF document (.pdf).');
-      return;
-    }
+    setSelectedFile(file);
+    const detected = detectFileType(file);
+    setUploadType(detected);
 
-    setSelectedPdfFile(file);
     if (!uploadTitle.trim()) {
-      // Auto-populate title from clean filename
-      const cleanName = file.name.replace(/\.pdf$/i, '').replace(/[_-]/g, ' ');
-      setUploadTitle(cleanName);
+      const cleanName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+      setUploadTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
     }
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      setPdfDataUrl(event.target?.result as string);
+      setFileDataUrl(event.target?.result as string);
+    };
+    reader.onerror = () => {
+      setErrorMsg('Could not read selected file.');
     };
     reader.readAsDataURL(file);
     setErrorMsg(null);
+  };
+
+  // Demo sample media loaders for quick testing
+  const loadSampleMedia = (type: 'VIDEO' | 'AUDIO' | 'PDF' | 'IMAGE') => {
+    if (type === 'VIDEO') {
+      setUploadType('VIDEO');
+      setUploadTitle('Electromagnetic Induction & Faraday Laws (Lecture Video)');
+      setUploadSubject('Physics');
+      setUploadChapter('Unit 4: Electromagnetism');
+      setUploadDescription('High-definition demonstration video showing magnetic fields and induction.');
+      setFileDataUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4');
+      setSelectedFile(new File(['sample-video'], 'Electromagnetic_Induction_Video.mp4', { type: 'video/mp4' }));
+    } else if (type === 'AUDIO') {
+      setUploadType('AUDIO');
+      setUploadTitle('English Pronunciation & Shakespeare Sonnet Lecture');
+      setUploadSubject('English');
+      setUploadChapter('Unit 2: Poetry & Drama');
+      setUploadDescription('Audio pronunciation and stanza breakdown by Senior English faculty.');
+      setFileDataUrl('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3');
+      setSelectedFile(new File(['sample-audio'], 'Literature_Audio_Lecture.mp3', { type: 'audio/mp3' }));
+    } else if (type === 'IMAGE') {
+      setUploadType('IMAGE');
+      setUploadTitle('Plant Cell & Organelle Diagram (High Resolution)');
+      setUploadSubject('Biology');
+      setUploadChapter('Chapter 8: Cell Structure');
+      setUploadDescription('Labeled diagram showing chloroplasts, vacuole, cell wall, and nucleus.');
+      setFileDataUrl('https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=1200&q=80');
+      setSelectedFile(new File(['sample-image'], 'Cell_Biology_Diagram.jpg', { type: 'image/jpeg' }));
+    } else {
+      setUploadType('PDF');
+      setUploadTitle('CBSE 2026 Mathematics Solved Calculus Guide');
+      setUploadSubject('Mathematics');
+      setUploadChapter('Unit 3: Differential Calculus');
+      setUploadDescription('Step-by-step differentiation formulas, solved examples, and practice exercises.');
+      setFileDataUrl('https://raw.githubusercontent.com/mozilla/pdf.js/master/examples/learning/helloworld.pdf');
+      setSelectedFile(new File(['sample-pdf'], 'Mathematics_Calculus_Guide.pdf', { type: 'application/pdf' }));
+    }
   };
 
   const handleUploadSubmit = async (e: React.FormEvent) => {
@@ -130,8 +189,8 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
       return;
     }
 
-    if (uploadType === 'PDF' && !selectedPdfFile && !pdfDataUrl) {
-      setErrorMsg('Please upload a PDF file.');
+    if (uploadType !== 'RICH_NOTE' && !selectedFile && !fileDataUrl) {
+      setErrorMsg('Please choose a file to upload or select a demo sample.');
       return;
     }
 
@@ -147,6 +206,12 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
       const selectedClass = classes.find((c) => c.id === uploadClassId);
       const targetClassName = uploadClassId === 'ALL' ? 'All Classes' : selectedClass?.name || 'Classroom';
 
+      let fileExt = 'pdf';
+      if (uploadType === 'VIDEO') fileExt = 'mp4';
+      if (uploadType === 'AUDIO') fileExt = 'mp3';
+      if (uploadType === 'IMAGE') fileExt = 'jpg';
+      if (uploadType === 'DOCUMENT') fileExt = 'doc';
+
       await onUploadMaterial({
         title: uploadTitle.trim(),
         description: uploadDescription.trim(),
@@ -155,9 +220,9 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
         className: targetClassName,
         subject: uploadSubject,
         chapterOrUnit: uploadChapter.trim() || 'Unit 1',
-        fileName: selectedPdfFile?.name || `${uploadTitle.replace(/\s+/g, '_')}.pdf`,
-        fileSizeBytes: selectedPdfFile?.size || 1024000,
-        fileUrl: pdfDataUrl || undefined,
+        fileName: selectedFile?.name || `${uploadTitle.replace(/\s+/g, '_')}.${fileExt}`,
+        fileSizeBytes: selectedFile?.size || 2048000,
+        fileUrl: fileDataUrl || undefined,
         contentMarkdown: uploadType === 'RICH_NOTE' ? uploadContentMarkdown : undefined,
         allowOfflineDownload: true,
       });
@@ -176,8 +241,8 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
     setUploadDescription('');
     setUploadChapter('');
     setUploadContentMarkdown('');
-    setSelectedPdfFile(null);
-    setPdfDataUrl(null);
+    setSelectedFile(null);
+    setFileDataUrl(null);
     setErrorMsg(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -414,13 +479,21 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                   {/* File Metadata Card */}
                   <div className="p-3 bg-gray-50/80 rounded-2xl border border-gray-100 flex items-center justify-between text-[11px] text-gray-500">
                     <div className="flex items-center space-x-2 truncate">
-                      <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                      {item.type === 'VIDEO' ? (
+                        <Video className="w-4 h-4 text-rose-600 shrink-0" />
+                      ) : item.type === 'AUDIO' ? (
+                        <Music className="w-4 h-4 text-purple-600 shrink-0" />
+                      ) : item.type === 'IMAGE' ? (
+                        <ImageIcon className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                      )}
                       <span className="truncate font-mono font-medium text-gray-700">
                         {item.fileName || `${item.title}.pdf`}
                       </span>
                     </div>
                     <span className="shrink-0 text-gray-400 font-mono ml-2">
-                      {formatFileSize(item.fileSizeBytes)}
+                      {item.type} • {formatFileSize(item.fileSizeBytes)}
                     </span>
                   </div>
                 </div>
@@ -490,26 +563,74 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                 </div>
               )}
 
-              {/* Format Toggle */}
-              <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 rounded-2xl">
-                <button
-                  type="button"
-                  onClick={() => setUploadType('PDF')}
-                  className={`py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
-                    uploadType === 'PDF' ? 'bg-white text-gray-950 shadow-xs' : 'text-gray-500 hover:text-gray-900'
-                  }`}
-                >
-                  📄 PDF Document File
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUploadType('RICH_NOTE')}
-                  className={`py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
-                    uploadType === 'RICH_NOTE' ? 'bg-white text-gray-950 shadow-xs' : 'text-gray-500 hover:text-gray-900'
-                  }`}
-                >
-                  📝 Digital Note / Formula Guide
-                </button>
+              {/* Format Selector Pills */}
+              <div>
+                <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                  Material / Media Format
+                </label>
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 p-1 bg-gray-100 rounded-2xl">
+                  {[
+                    { id: 'PDF', label: 'PDF Book', icon: '📄' },
+                    { id: 'VIDEO', label: 'Video', icon: '🎬' },
+                    { id: 'AUDIO', label: 'Audio', icon: '🎧' },
+                    { id: 'IMAGE', label: 'Diagram', icon: '🖼️' },
+                    { id: 'DOCUMENT', label: 'Document', icon: '📑' },
+                    { id: 'RICH_NOTE', label: 'Rich Notes', icon: '📝' },
+                  ].map((fmt) => (
+                    <button
+                      key={fmt.id}
+                      type="button"
+                      onClick={() => setUploadType(fmt.id as StudyMaterialType)}
+                      className={`py-1.5 px-2 text-[11px] font-semibold rounded-xl transition-all cursor-pointer flex flex-col items-center justify-center space-y-0.5 ${
+                        uploadType === fmt.id ? 'bg-white text-gray-950 shadow-xs' : 'text-gray-500 hover:text-gray-900'
+                      }`}
+                    >
+                      <span className="text-sm">{fmt.icon}</span>
+                      <span>{fmt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Instant Demo Media Buttons for Admin Testing */}
+              <div className="p-3 bg-blue-50/70 border border-blue-100 rounded-2xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-blue-900 flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Quick-Test Media Presets:</span>
+                  </span>
+                  <span className="text-[10px] text-blue-600">Populate instantly</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => loadSampleMedia('VIDEO')}
+                    className="px-2.5 py-1 bg-white hover:bg-blue-100/60 border border-blue-200 text-blue-800 rounded-xl text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+                  >
+                    <span>🎬 Physics Video</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadSampleMedia('AUDIO')}
+                    className="px-2.5 py-1 bg-white hover:bg-blue-100/60 border border-blue-200 text-blue-800 rounded-xl text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+                  >
+                    <span>🎧 Audio Lecture</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadSampleMedia('IMAGE')}
+                    className="px-2.5 py-1 bg-white hover:bg-blue-100/60 border border-blue-200 text-blue-800 rounded-xl text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+                  >
+                    <span>🖼️ Biology Diagram</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => loadSampleMedia('PDF')}
+                    className="px-2.5 py-1 bg-white hover:bg-blue-100/60 border border-blue-200 text-blue-800 rounded-xl text-[11px] font-medium flex items-center space-x-1 cursor-pointer transition-colors"
+                  >
+                    <span>📄 Calculus PDF</span>
+                  </button>
+                </div>
               </div>
 
               {/* Class & Subject Selector */}
@@ -553,14 +674,14 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
               {/* Title & Chapter */}
               <div>
                 <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                  Document Title <span className="text-rose-500">*</span>
+                  Document / Media Title <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
                   value={uploadTitle}
                   onChange={(e) => setUploadTitle(e.target.value)}
-                  placeholder="e.g. Chapter 4: Quadratic Equations - Formula & Practice Sheet"
+                  placeholder="e.g. Chapter 4: Quadratic Equations - Video & Solved Worksheet"
                   className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-950"
                 />
               </div>
@@ -592,16 +713,16 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                 </div>
               </div>
 
-              {/* File Upload Box (PDF) */}
-              {uploadType === 'PDF' && (
+              {/* File Upload Box for Any File */}
+              {uploadType !== 'RICH_NOTE' && (
                 <div>
                   <label className="block text-[11px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                    Select PDF File (.pdf)
+                    Select or Drop File ({uploadType})
                   </label>
                   <div
                     onClick={() => fileInputRef.current?.click()}
                     className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-colors ${
-                      selectedPdfFile
+                      selectedFile || fileDataUrl
                         ? 'border-emerald-300 bg-emerald-50/40'
                         : 'border-gray-300 hover:border-gray-400 bg-gray-50/60'
                     }`}
@@ -609,23 +730,31 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".pdf,application/pdf"
+                      accept=".pdf,application/pdf,video/*,.mp4,.webm,.mov,audio/*,.mp3,.wav,.m4a,image/*,.png,.jpg,.jpeg,.svg,.webp,.doc,.docx,.txt"
                       onChange={handleFileChange}
                       className="hidden"
                     />
-                    {selectedPdfFile ? (
+                    {selectedFile ? (
                       <div className="flex items-center justify-center space-x-2 text-emerald-800">
                         <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                         <div>
-                          <div className="font-semibold">{selectedPdfFile.name}</div>
-                          <div className="text-[10px] text-emerald-600">{formatFileSize(selectedPdfFile.size)} • Ready to upload</div>
+                          <div className="font-semibold">{selectedFile.name}</div>
+                          <div className="text-[10px] text-emerald-600">{formatFileSize(selectedFile.size)} • Format: {uploadType} • Ready to upload</div>
+                        </div>
+                      </div>
+                    ) : fileDataUrl ? (
+                      <div className="flex items-center justify-center space-x-2 text-emerald-800">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <div>
+                          <div className="font-semibold">{uploadTitle || 'Demo Media Loaded'}</div>
+                          <div className="text-[10px] text-emerald-600">Sample Media Attached • Ready to publish</div>
                         </div>
                       </div>
                     ) : (
                       <div className="space-y-1.5">
                         <Upload className="w-6 h-6 text-gray-400 mx-auto" />
-                        <div className="font-semibold text-gray-800 text-xs">Click to browse or drop PDF here</div>
-                        <div className="text-[10px] text-gray-400">PDF up to 50MB supported • Automatically cached for offline student study</div>
+                        <div className="font-semibold text-gray-800 text-xs">Click to browse or drop any file here</div>
+                        <div className="text-[10px] text-gray-400">PDF, Videos (MP4/WebM), Audio (MP3/WAV), Images, Docs supported</div>
                       </div>
                     )}
                   </div>
@@ -704,12 +833,51 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
             </div>
 
             {/* Viewer Content */}
-            <div className="flex-1 overflow-y-auto p-6 bg-white">
-              {previewMaterial.fileUrl ? (
+            <div className="flex-1 overflow-y-auto p-6 bg-white flex flex-col justify-center">
+              {previewMaterial.type === 'VIDEO' || (previewMaterial.fileUrl && (previewMaterial.fileUrl.endsWith('.mp4') || previewMaterial.fileUrl.startsWith('data:video/'))) ? (
+                <div className="w-full flex flex-col items-center justify-center space-y-3">
+                  <div className="w-full max-w-2xl bg-black rounded-2xl overflow-hidden shadow-lg border border-gray-800">
+                    <video
+                      controls
+                      autoPlay
+                      playsInline
+                      className="w-full max-h-[60vh] object-contain"
+                      src={previewMaterial.fileUrl}
+                    >
+                      Your browser does not support HTML5 video playback.
+                    </video>
+                  </div>
+                  <div className="text-xs text-gray-500 font-medium">
+                    Integrated Video Lesson Player • Offline Cached for Kiosks
+                  </div>
+                </div>
+              ) : previewMaterial.type === 'AUDIO' || (previewMaterial.fileUrl && (previewMaterial.fileUrl.endsWith('.mp3') || previewMaterial.fileUrl.startsWith('data:audio/'))) ? (
+                <div className="w-full max-w-lg mx-auto p-6 bg-purple-50/60 border border-purple-200 rounded-3xl text-center space-y-4 shadow-sm">
+                  <div className="w-16 h-16 bg-purple-100 text-purple-700 rounded-2xl flex items-center justify-center mx-auto">
+                    <Music className="w-8 h-8" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-gray-900">{previewMaterial.title}</h4>
+                    <p className="text-xs text-purple-700 mt-0.5">{previewMaterial.subject} • Audio Lecture</p>
+                  </div>
+                  <audio controls className="w-full" src={previewMaterial.fileUrl}>
+                    Your browser does not support HTML5 audio playback.
+                  </audio>
+                </div>
+              ) : previewMaterial.type === 'IMAGE' || (previewMaterial.fileUrl && (previewMaterial.fileUrl.startsWith('data:image/') || previewMaterial.fileUrl.includes('unsplash.com') || previewMaterial.fileName?.endsWith('.jpg') || previewMaterial.fileName?.endsWith('.png'))) ? (
+                <div className="w-full flex flex-col items-center justify-center">
+                  <img
+                    src={previewMaterial.fileUrl}
+                    alt={previewMaterial.title}
+                    className="max-h-[65vh] object-contain rounded-2xl border border-gray-200 shadow-md"
+                  />
+                  <p className="text-xs text-gray-500 mt-2 font-medium">{previewMaterial.chapterOrUnit}</p>
+                </div>
+              ) : previewMaterial.fileUrl ? (
                 <iframe
                   src={previewMaterial.fileUrl}
                   title={previewMaterial.title}
-                  className="w-full h-full rounded-2xl border border-gray-200"
+                  className="w-full h-full min-h-[500px] rounded-2xl border border-gray-200"
                 />
               ) : previewMaterial.contentMarkdown ? (
                 <div className="prose prose-sm max-w-none font-sans text-gray-800 space-y-3">

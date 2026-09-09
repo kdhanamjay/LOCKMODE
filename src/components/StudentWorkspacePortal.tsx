@@ -50,6 +50,15 @@ import {
   Terminal,
   Volume2,
   LogOut,
+  Video,
+  Music,
+  Play,
+  Pause,
+  RotateCcw,
+  Home,
+  ArrowRight,
+  Image as ImageIcon,
+  Bookmark,
 } from 'lucide-react';
 import { Device, Application, DevicePolicy, AdminBroadcastMessage, Deployment, WebFilterRule, StudyMaterial, School, SchoolClass } from '../types/mdm';
 import { api, subscribeToMdmEvents } from '../lib/api';
@@ -299,10 +308,14 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   };
 
   const [activeApp, setActiveApp] = useState<string | null>(null);
-  const [browserUrl, setBrowserUrl] = useState('classroom.google.com');
-  const [browserInput, setBrowserInput] = useState('classroom.google.com');
+  const [browserUrl, setBrowserUrl] = useState('https://en.wikipedia.org/wiki/Main_Page');
+  const [browserInput, setBrowserInput] = useState('https://en.wikipedia.org/wiki/Main_Page');
   const [isBrowserOpen, setIsBrowserOpen] = useState(false);
   const [browserBlocked, setBrowserBlocked] = useState(false);
+  const [browserBlockedReason, setBrowserBlockedReason] = useState<string>('');
+  const [browserHistory, setBrowserHistory] = useState<string[]>(['https://en.wikipedia.org/wiki/Main_Page']);
+  const [browserHistoryIndex, setBrowserHistoryIndex] = useState(0);
+  const [isBrowserLoading, setIsBrowserLoading] = useState(false);
   const [violationToast, setViolationToast] = useState<string | null>(null);
 
   // Network & Sync State
@@ -336,12 +349,21 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   const [isTaskManagerGuideOpen, setIsTaskManagerGuideOpen] = useState(false);
   const [copiedTaskMgrCmd, setCopiedTaskMgrCmd] = useState(false);
 
-  // Study Materials State (Class-wise & Subject-wise PDF Notes)
+  // Study Materials State (Multi-format: PDF, Video, Audio, Image, Rich Notes)
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>(propMaterials || []);
   const [selectedSubject, setSelectedSubject] = useState<string>('ALL');
   const [studySearchQuery, setStudySearchQuery] = useState('');
   const [readingMaterial, setReadingMaterial] = useState<StudyMaterial | null>(null);
   const [pdfZoomLevel, setPdfZoomLevel] = useState<number>(100);
+  const [videoPlaybackRate, setVideoPlaybackRate] = useState<number>(1);
+  const [imageZoomLevel, setImageZoomLevel] = useState<number>(100);
+
+  // Sync propMaterials automatically when updated from Admin Dashboard
+  useEffect(() => {
+    if (propMaterials && propMaterials.length > 0) {
+      setStudyMaterials(propMaterials);
+    }
+  }, [propMaterials]);
 
   // Tab switch & Window Blur Lockdown State
   const [isTabSwitchViolationActive, setIsTabSwitchViolationActive] = useState(false);
@@ -1065,27 +1087,144 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     setCalcResetOnNext(false);
   };
 
+  // Approved Educational Portals Whitelist for Safe Browser
+  const ALLOWED_EDUCATIONAL_DOMAINS = [
+    'wikipedia.org',
+    'wikimedia.org',
+    'khanacademy.org',
+    'ncert.nic.in',
+    'classroom.google.com',
+    'britannica.com',
+    'w3schools.com',
+    'geeksforgeeks.org',
+    'scratch.mit.edu',
+    'nasa.gov',
+    'nationalgeographic.com',
+    'archive.org',
+    'mathsisfun.com',
+    'wolframalpha.com',
+    'mit.edu',
+    'harvard.edu',
+    'stanford.edu',
+    'duolingo.com',
+    'phET.colorado.edu',
+  ];
+
   // Safe Browser Navigation
-  const handleNavigate = (input: string) => {
-    const clean = input.toLowerCase().trim();
-    if (
-      clean.includes('youtube') ||
-      clean.includes('facebook') ||
-      clean.includes('instagram') ||
-      clean.includes('tiktok') ||
-      clean.includes('reddit') ||
-      clean.includes('gaming') ||
-      clean.includes('discord')
-    ) {
+  const handleNavigate = (input: string, pushHistory = true) => {
+    let clean = input.trim();
+    if (!clean) return;
+
+    // Convert search terms or raw queries into Wikipedia Search
+    let targetUrl = clean;
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      if (clean.includes('.') && !clean.includes(' ')) {
+        targetUrl = `https://${clean}`;
+      } else {
+        // Query search
+        targetUrl = `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(clean)}`;
+      }
+    }
+
+    let hostname = '';
+    try {
+      const parsed = new URL(targetUrl);
+      hostname = parsed.hostname.toLowerCase();
+    } catch {
+      hostname = clean.toLowerCase();
+    }
+
+    // Check blacklist first
+    const isRestricted =
+      hostname.includes('youtube') ||
+      hostname.includes('facebook') ||
+      hostname.includes('instagram') ||
+      hostname.includes('tiktok') ||
+      hostname.includes('reddit') ||
+      hostname.includes('gaming') ||
+      hostname.includes('discord') ||
+      hostname.includes('twitch') ||
+      hostname.includes('twitter') ||
+      hostname.includes('x.com') ||
+      hostname.includes('netflix');
+
+    if (isRestricted) {
       setBrowserBlocked(true);
-      setBrowserUrl(input);
-      setViolationToast(`Safe Web Filter: Blocked access to restricted domain "${input}"`);
-      setTimeout(() => setViolationToast(null), 3000);
-    } else {
-      setBrowserBlocked(false);
-      setBrowserUrl(input);
+      setBrowserBlockedReason(`Access to "${hostname}" is blocked under School Child Safety & Anti-Distraction Policy.`);
+      setBrowserUrl(targetUrl);
+      setBrowserInput(targetUrl);
+      setViolationToast(`Safe Web Filter: Blocked access to non-educational site (${hostname})`);
+      setTimeout(() => setViolationToast(null), 3500);
+      return;
+    }
+
+    // Check whitelist
+    const isWhitelisted =
+      ALLOWED_EDUCATIONAL_DOMAINS.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`)) ||
+      (currentPolicy?.webFilterRules || []).some((r) => r.action === 'ALLOW' && (hostname.includes(r.domain) || r.domain === '*'));
+
+    if (!isWhitelisted) {
+      setBrowserBlocked(true);
+      setBrowserBlockedReason(`Domain "${hostname}" is not in the School Board Approved Educational Whitelist. Only authorized learning portals (Wikipedia, Khan Academy, NCERT, Britannica, etc.) are permitted.`);
+      setBrowserUrl(targetUrl);
+      setBrowserInput(targetUrl);
+      setViolationToast(`Access Restricted: "${hostname}" not on approved school whitelist`);
+      setTimeout(() => setViolationToast(null), 3500);
+      return;
+    }
+
+    // Allowed!
+    setBrowserBlocked(false);
+    setBrowserBlockedReason('');
+    setBrowserUrl(targetUrl);
+    setBrowserInput(targetUrl);
+    setIsBrowserLoading(true);
+
+    if (pushHistory) {
+      setBrowserHistory((prev) => {
+        const next = [...prev.slice(0, browserHistoryIndex + 1), targetUrl];
+        return next;
+      });
+      setBrowserHistoryIndex((prev) => prev + 1);
     }
   };
+
+  // Browser navigation history controls
+  const handleBrowserBack = () => {
+    if (browserHistoryIndex > 0) {
+      const target = browserHistory[browserHistoryIndex - 1];
+      setBrowserHistoryIndex((prev) => prev - 1);
+      handleNavigate(target, false);
+    }
+  };
+
+  const handleBrowserForward = () => {
+    if (browserHistoryIndex < browserHistory.length - 1) {
+      const target = browserHistory[browserHistoryIndex + 1];
+      setBrowserHistoryIndex((prev) => prev + 1);
+      handleNavigate(target, false);
+    }
+  };
+
+  const handleBrowserReload = () => {
+    setIsBrowserLoading(true);
+    const curr = browserUrl;
+    setBrowserUrl('');
+    setTimeout(() => {
+      setBrowserUrl(curr);
+    }, 50);
+  };
+
+  // Listen for inner navigation clicks from our safe proxy
+  useEffect(() => {
+    const handleProxyMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'EDUGUARD_SAFE_BROWSER_NAV' && event.data.url) {
+        handleNavigate(event.data.url, true);
+      }
+    };
+    window.addEventListener('message', handleProxyMessage);
+    return () => window.removeEventListener('message', handleProxyMessage);
+  }, [browserHistoryIndex]);
 
   // Admin / Teacher PIN Unlock (Quick Local Override)
   const handleAdminUnlock = () => {
@@ -1190,29 +1329,32 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
   // Filter study materials for student's class
   const classMaterials = studyMaterials.filter((m) => {
-    const matchesClass = !m.classId || m.classId === 'ALL' || m.classId === currentDevice.classId;
-    const matchesSubject = selectedSubject === 'ALL' || m.subject === selectedSubject;
+    const matchesClass = !m.classId || m.classId === 'ALL' || !currentDevice.classId || m.classId === currentDevice.classId;
+    const matchesSubject = selectedSubject === 'ALL' || m.subject.toLowerCase() === selectedSubject.toLowerCase();
+    const authorStr = (m.authorTeacher || m.authorName || 'Teacher').toLowerCase();
+    const topicStr = (m.topic || m.chapterOrUnit || m.description || '').toLowerCase();
+    const query = studySearchQuery.toLowerCase().trim();
     const matchesQuery =
-      studySearchQuery === '' ||
-      m.title.toLowerCase().includes(studySearchQuery.toLowerCase()) ||
-      (m.topic && m.topic.toLowerCase().includes(studySearchQuery.toLowerCase())) ||
-      (m.description && m.description.toLowerCase().includes(studySearchQuery.toLowerCase())) ||
-      m.subject.toLowerCase().includes(studySearchQuery.toLowerCase()) ||
-      m.authorTeacher.toLowerCase().includes(studySearchQuery.toLowerCase());
+      query === '' ||
+      (m.title && m.title.toLowerCase().includes(query)) ||
+      topicStr.includes(query) ||
+      (m.description && m.description.toLowerCase().includes(query)) ||
+      (m.subject && m.subject.toLowerCase().includes(query)) ||
+      authorStr.includes(query);
     return matchesClass && matchesSubject && matchesQuery;
   });
 
-  const availableSubjects = ['ALL', ...Array.from(new Set(studyMaterials.map((m) => m.subject)))];
+  const availableSubjects = ['ALL', ...Array.from(new Set(studyMaterials.map((m) => m.subject).filter(Boolean)))];
 
   // Built-in Apps Catalog
   const builtInApps = [
     {
       id: 'app-notes-hub',
       name: 'Class Notes & Study Hub',
-      desc: 'Access verified subject PDF notes uploaded by your school teachers.',
+      desc: 'Access verified subject PDF notes, video lessons, and audio lectures uploaded by teachers.',
       pkg: 'com.edu.notes.hub',
       icon: '📚',
-      badge: `${studyMaterials.length} PDFs Available`,
+      badge: `${studyMaterials.length} Resources Available`,
       color: 'from-amber-600 to-amber-700',
     },
     {
@@ -1526,8 +1668,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                 )}
               </div>
             </div>
-          ) : activeApp === 'com.edu.notes' ? (
-            /* 2. APP: CLASS STUDY NOTES & PDF READER HUB */
+          ) : (activeApp === 'com.edu.notes' || activeApp === 'com.edu.notes.hub' || activeApp === 'app-notes-hub') ? (
+            /* 2. APP: CLASS STUDY NOTES, MULTI-MEDIA & PDF READER HUB */
             <div className="flex-1 flex flex-col bg-gray-900 border border-gray-800 rounded-3xl overflow-hidden shadow-2xl">
               {/* Header */}
               <div className="p-4 bg-gray-950 border-b border-gray-800 flex flex-wrap items-center justify-between gap-3">
@@ -1546,39 +1688,83 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                   </button>
                   <div>
                     <h3 className="font-bold text-sm text-white flex items-center space-x-2">
-                      <BookOpen className="w-4 h-4 text-blue-400" />
-                      <span>{readingMaterial ? readingMaterial.title : 'Class Study Materials & PDF Library'}</span>
+                      <BookOpen className="w-4 h-4 text-amber-400" />
+                      <span>{readingMaterial ? readingMaterial.title : 'Class Notes & Multi-Media Study Hub'}</span>
                     </h3>
                     <p className="text-[11px] text-gray-400">
                       {readingMaterial
-                        ? `${readingMaterial.subject} • Class: ${readingMaterial.className} • Uploaded by ${readingMaterial.authorTeacher}`
-                        : `Grade 12-A • ${studyMaterials.length} Teacher Uploaded Notes & Chapter PDFs`}
+                        ? `${readingMaterial.subject} • Class: ${readingMaterial.className || currentDevice.className || '12-A'} • Teacher: ${readingMaterial.authorTeacher || readingMaterial.authorName || 'Staff'}`
+                        : `${currentDevice.className || 'Grade 12-A'} • ${studyMaterials.length} Teacher Uploaded Verified Lessons, PDFs & Media`}
                     </p>
                   </div>
                 </div>
 
                 {readingMaterial ? (
                   <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => setPdfZoomLevel((prev) => Math.max(70, prev - 15))}
-                      className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
-                      title="Zoom Out"
-                    >
-                      <ZoomOut className="w-4 h-4" />
-                    </button>
-                    <span className="text-xs font-mono text-gray-300 w-12 text-center">{pdfZoomLevel}%</span>
-                    <button
-                      onClick={() => setPdfZoomLevel((prev) => Math.min(180, prev + 15))}
-                      className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
-                      title="Zoom In"
-                    >
-                      <ZoomIn className="w-4 h-4" />
-                    </button>
+                    {/* Zoom / Playback controls depending on media type */}
+                    {(readingMaterial.type === 'PDF' || readingMaterial.fileType === 'pdf') && (
+                      <>
+                        <button
+                          onClick={() => setPdfZoomLevel((prev) => Math.max(70, prev - 15))}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
+                          title="Zoom Out"
+                        >
+                          <ZoomOut className="w-4 h-4" />
+                        </button>
+                        <span className="text-xs font-mono text-gray-300 w-12 text-center">{pdfZoomLevel}%</span>
+                        <button
+                          onClick={() => setPdfZoomLevel((prev) => Math.min(180, prev + 15))}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
+                          title="Zoom In"
+                        >
+                          <ZoomIn className="w-4 h-4" />
+                        </button>
+                      </>
+                    )}
+
+                    {(readingMaterial.type === 'IMAGE' || (readingMaterial.fileType && ['png', 'jpg', 'jpeg', 'webp', 'svg'].includes(readingMaterial.fileType.toLowerCase()))) && (
+                      <>
+                        <button
+                          onClick={() => setImageZoomLevel((prev) => Math.max(50, prev - 25))}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
+                          title="Zoom Out"
+                        >
+                          <ZoomOut className="w-4 h-4" />
+                        </button>
+                        <span className="text-xs font-mono text-gray-300 w-12 text-center">{imageZoomLevel}%</span>
+                        <button
+                          onClick={() => setImageZoomLevel((prev) => Math.min(250, prev + 25))}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
+                          title="Zoom In"
+                        >
+                          <ZoomIn className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setImageZoomLevel(100)}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl cursor-pointer text-xs"
+                          title="Reset Zoom"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+
+                    {readingMaterial.fileUrl && (
+                      <a
+                        href={readingMaterial.fileUrl}
+                        download={`${readingMaterial.title.replace(/[^a-z0-9]/gi, '_')}.${readingMaterial.fileType || 'dat'}`}
+                        className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-xl cursor-pointer transition-colors"
+                        title="Download Offline Copy"
+                      >
+                        <Download className="w-4 h-4" />
+                      </a>
+                    )}
+
                     <button
                       onClick={() => setReadingMaterial(null)}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-xs transition-colors"
                     >
-                      All Notes List
+                      Browse All Hub
                     </button>
                   </div>
                 ) : (
@@ -1589,8 +1775,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                         type="text"
                         value={studySearchQuery}
                         onChange={(e) => setStudySearchQuery(e.target.value)}
-                        placeholder="Search chapter, subject, formula..."
-                        className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                        placeholder="Search title, chapter, teacher, subject..."
+                        className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-amber-500"
                       />
                     </div>
                   </div>
@@ -1600,43 +1786,182 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
               {/* Reading View or List View */}
               {readingMaterial ? (
                 <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-                  {/* Left: Document Viewer */}
-                  <div className="flex-1 p-6 overflow-y-auto bg-gray-950/80 border-r border-gray-800">
-                    <div
-                      className="max-w-3xl mx-auto space-y-6 transition-all"
-                      style={{ fontSize: `${pdfZoomLevel}%` }}
-                    >
+                  {/* Left: Media / Document Viewer */}
+                  <div className="flex-1 p-6 overflow-y-auto bg-gray-950/90 border-r border-gray-800">
+                    <div className="max-w-4xl mx-auto space-y-6">
                       {/* Document Header Card */}
                       <div className="bg-gray-900 border border-gray-800 rounded-2xl p-5 space-y-3">
                         <div className="flex items-center justify-between">
-                          <span className="px-2.5 py-1 bg-blue-500/20 text-blue-300 text-xs font-bold rounded-lg uppercase">
-                            {readingMaterial.subject}
-                          </span>
+                          <div className="flex items-center space-x-2">
+                            <span className="px-2.5 py-1 bg-amber-500/20 text-amber-300 text-xs font-bold rounded-lg uppercase">
+                              {readingMaterial.subject}
+                            </span>
+                            <span className="px-2.5 py-1 bg-gray-800 text-gray-300 text-[11px] font-semibold rounded-lg uppercase flex items-center space-x-1">
+                              {readingMaterial.type === 'VIDEO' ? (
+                                <>
+                                  <Video className="w-3.5 h-3.5 text-purple-400" />
+                                  <span className="text-purple-300">Video Lesson</span>
+                                </>
+                              ) : readingMaterial.type === 'AUDIO' ? (
+                                <>
+                                  <Music className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span className="text-emerald-300">Audio Lecture</span>
+                                </>
+                              ) : readingMaterial.type === 'IMAGE' ? (
+                                <>
+                                  <ImageIcon className="w-3.5 h-3.5 text-cyan-400" />
+                                  <span className="text-cyan-300">Diagram / Visual</span>
+                                </>
+                              ) : readingMaterial.type === 'DOCUMENT' ? (
+                                <>
+                                  <BookOpen className="w-3.5 h-3.5 text-blue-400" />
+                                  <span className="text-blue-300">Document</span>
+                                </>
+                              ) : (
+                                <>
+                                  <FileText className="w-3.5 h-3.5 text-rose-400" />
+                                  <span className="text-rose-300">PDF Notes</span>
+                                </>
+                              )}
+                            </span>
+                          </div>
+
                           <span className="text-xs text-emerald-400 flex items-center space-x-1 font-semibold">
                             <FileCheck className="w-3.5 h-3.5" />
-                            <span>Verified Teacher Material</span>
+                            <span>Teacher Verified • Offline Cached</span>
                           </span>
                         </div>
-                        <h2 className="text-xl font-bold text-white">{readingMaterial.title}</h2>
+
+                        <h2 className="text-xl font-bold text-white tracking-tight">{readingMaterial.title}</h2>
+                        
+                        {(readingMaterial.description || readingMaterial.topic) && (
+                          <p className="text-xs text-gray-300 leading-relaxed bg-gray-950/60 p-3 rounded-xl border border-gray-800">
+                            {readingMaterial.description || readingMaterial.topic}
+                          </p>
+                        )}
+
                         <div className="text-xs text-gray-400 flex flex-wrap gap-4 pt-1 border-t border-gray-800/80">
-                          <span>Topic: <strong className="text-gray-200">{readingMaterial.topic}</strong></span>
-                          <span>Teacher: <strong className="text-gray-200">{readingMaterial.authorTeacher}</strong></span>
-                          <span>Pages: <strong className="text-gray-200">{readingMaterial.pageCount || 1}</strong></span>
+                          <span>Chapter: <strong className="text-gray-200">{readingMaterial.chapterOrUnit || readingMaterial.topic || 'General'}</strong></span>
+                          <span>Teacher: <strong className="text-gray-200">{readingMaterial.authorTeacher || readingMaterial.authorName || 'Teacher'}</strong></span>
+                          <span>Format: <strong className="text-gray-200">{readingMaterial.fileType?.toUpperCase() || readingMaterial.type}</strong></span>
+                          {readingMaterial.pageCount && (
+                            <span>Pages: <strong className="text-gray-200">{readingMaterial.pageCount}</strong></span>
+                          )}
+                          {readingMaterial.duration && (
+                            <span>Duration: <strong className="text-gray-200">{readingMaterial.duration}</strong></span>
+                          )}
                         </div>
                       </div>
 
-                      {/* Embedded PDF iframe or Formatted Content View */}
-                      {readingMaterial.fileUrl && readingMaterial.fileUrl.startsWith('data:application/pdf') ? (
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden h-[550px]">
+                      {/* DYNAMIC FILE-SPECIFIC VIEWER */}
+                      {/* 1. VIDEO VIEWER */}
+                      {(readingMaterial.type === 'VIDEO' || readingMaterial.fileType === 'mp4' || readingMaterial.fileType === 'webm' || (readingMaterial.fileUrl && readingMaterial.fileUrl.startsWith('data:video/'))) ? (
+                        <div className="bg-gray-900 border border-gray-800 rounded-3xl overflow-hidden shadow-2xl p-4 space-y-4">
+                          <div className="relative rounded-2xl overflow-hidden bg-black flex items-center justify-center max-h-[550px]">
+                            <video
+                              src={readingMaterial.fileUrl}
+                              controls
+                              autoPlay
+                              className="w-full max-h-[550px] object-contain"
+                              playbackRate={videoPlaybackRate}
+                            />
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-3 px-2">
+                            <div className="flex items-center space-x-2 text-xs text-gray-300">
+                              <span className="font-semibold text-purple-400 flex items-center space-x-1">
+                                <Video className="w-4 h-4" />
+                                <span>Playback Speed:</span>
+                              </span>
+                              {[0.75, 1, 1.25, 1.5, 2].map((rate) => (
+                                <button
+                                  key={rate}
+                                  onClick={() => setVideoPlaybackRate(rate)}
+                                  className={`px-2.5 py-1 rounded-lg font-mono text-xs cursor-pointer transition-colors ${
+                                    videoPlaybackRate === rate
+                                      ? 'bg-purple-600 text-white font-bold'
+                                      : 'bg-gray-800 text-gray-400 hover:text-white'
+                                  }`}
+                                >
+                                  {rate}x
+                                </button>
+                              ))}
+                            </div>
+
+                            <div className="text-xs text-gray-400 font-mono">
+                              Offline Video Stream Active
+                            </div>
+                          </div>
+                        </div>
+                      ) : (readingMaterial.type === 'AUDIO' || readingMaterial.fileType === 'mp3' || readingMaterial.fileType === 'wav' || readingMaterial.fileType === 'ogg' || (readingMaterial.fileUrl && readingMaterial.fileUrl.startsWith('data:audio/'))) ? (
+                        /* 2. AUDIO VIEWER */
+                        <div className="bg-gray-900 border border-gray-800 rounded-3xl p-6 shadow-2xl space-y-6">
+                          <div className="p-6 bg-gradient-to-r from-emerald-950/60 to-gray-950 border border-emerald-900/40 rounded-2xl flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-6">
+                            <div className="w-16 h-16 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shrink-0 shadow-inner">
+                              <Music className="w-8 h-8 animate-pulse" />
+                            </div>
+                            <div className="space-y-1 text-center sm:text-left flex-1">
+                              <div className="text-xs font-bold uppercase tracking-wider text-emerald-400">Class Audio Lecture</div>
+                              <h4 className="text-lg font-bold text-white">{readingMaterial.title}</h4>
+                              <p className="text-xs text-gray-400">Speaker: {readingMaterial.authorTeacher || 'Instructor'}</p>
+                            </div>
+                          </div>
+
+                          <div className="bg-gray-950 p-4 rounded-2xl border border-gray-800 flex flex-col items-center space-y-3">
+                            <audio
+                              src={readingMaterial.fileUrl}
+                              controls
+                              className="w-full"
+                              autoPlay
+                            />
+                            <div className="flex items-center space-x-1.5 pt-2">
+                              {[35, 60, 45, 80, 65, 40, 90, 70, 50, 85, 30, 75, 55, 95, 40, 65, 50, 80].map((h, i) => (
+                                <div
+                                  key={i}
+                                  className="w-1 bg-emerald-500/60 rounded-full"
+                                  style={{ height: `${h * 0.25}px` }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (readingMaterial.type === 'IMAGE' || (readingMaterial.fileType && ['png', 'jpg', 'jpeg', 'webp', 'svg'].includes(readingMaterial.fileType.toLowerCase())) || (readingMaterial.fileUrl && readingMaterial.fileUrl.startsWith('data:image/'))) ? (
+                        /* 3. IMAGE & DIAGRAM VIEWER */
+                        <div className="bg-gray-900 border border-gray-800 rounded-3xl p-4 shadow-2xl space-y-4">
+                          <div className="bg-gray-950 rounded-2xl border border-gray-800 overflow-auto p-4 flex items-center justify-center min-h-[400px] max-h-[600px]">
+                            <img
+                              src={readingMaterial.fileUrl}
+                              alt={readingMaterial.title}
+                              className="transition-all duration-150 rounded-xl object-contain max-h-[550px]"
+                              style={{ transform: `scale(${imageZoomLevel / 100})`, transformOrigin: 'center center' }}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between text-xs text-gray-400 px-2">
+                            <span>Interactive Diagram Preview ({imageZoomLevel}%)</span>
+                            <span>High-Resolution Teacher Graphic</span>
+                          </div>
+                        </div>
+                      ) : (readingMaterial.fileUrl && readingMaterial.fileUrl.startsWith('data:application/pdf')) ? (
+                        /* 4. EMBEDDED PDF VIEWER */
+                        <div
+                          className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl transition-all"
+                          style={{ height: `${Math.max(500, Math.min(850, 550 * (pdfZoomLevel / 100)))}px` }}
+                        >
                           <iframe
                             src={readingMaterial.fileUrl}
-                            className="w-full h-full border-0"
+                            className="w-full h-full border-0 bg-white"
                             title={readingMaterial.title}
                           />
                         </div>
                       ) : (
-                        <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 text-gray-200 leading-relaxed space-y-4 shadow-sm font-sans whitespace-pre-wrap">
-                          {readingMaterial.content || 'Document content loaded.'}
+                        /* 5. FORMATTED DOCUMENT / RICH NOTE VIEWER */
+                        <div
+                          className="bg-gray-900 border border-gray-800 rounded-2xl p-6 text-gray-200 leading-relaxed space-y-4 shadow-sm font-sans transition-all"
+                          style={{ fontSize: `${pdfZoomLevel}%` }}
+                        >
+                          <div className="whitespace-pre-wrap font-sans text-sm text-gray-200 leading-relaxed bg-gray-950/60 p-6 rounded-2xl border border-gray-800">
+                            {readingMaterial.content || 'Document content loaded.'}
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1657,9 +1982,12 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                         setOfflineNotes(e.target.value);
                         localStorage.setItem('eduguard_student_notes', e.target.value);
                       }}
-                      placeholder="Type your notes, equations, and questions while reading this material..."
+                      placeholder="Type equations, summaries, and exam prep notes while studying this material..."
                       className="flex-1 mt-3 bg-gray-950 border border-gray-800 rounded-2xl p-3 text-xs text-gray-200 focus:outline-none focus:border-amber-500 resize-none font-mono leading-relaxed"
                     />
+                    <p className="text-[11px] text-gray-500 mt-2">
+                      Notes are stored in offline local storage and persist across sessions.
+                    </p>
                   </div>
                 </div>
               ) : (
@@ -1673,7 +2001,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                         onClick={() => setSelectedSubject(sub)}
                         className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap ${
                           selectedSubject === sub
-                            ? 'bg-blue-600 text-white shadow-xs'
+                            ? 'bg-amber-500 text-gray-950 font-bold shadow-xs'
                             : 'bg-gray-800 text-gray-400 hover:text-white hover:bg-gray-700'
                         }`}
                       >
@@ -1696,38 +2024,60 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                       classMaterials.map((item) => (
                         <div
                           key={item.id}
-                          className="p-5 bg-gray-950 border border-gray-800 hover:border-blue-500/60 rounded-3xl flex flex-col justify-between space-y-4 transition-all group shadow-sm"
+                          className="p-5 bg-gray-950 border border-gray-800 hover:border-amber-500/60 rounded-3xl flex flex-col justify-between space-y-4 transition-all group shadow-sm"
                         >
                           <div className="space-y-2.5">
                             <div className="flex items-center justify-between">
-                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/20 text-amber-300 border border-amber-500/30">
                                 {item.subject}
                               </span>
-                              <span className="text-[10px] text-gray-500 font-mono">
-                                {item.fileType.toUpperCase()} {item.pageCount ? `• ${item.pageCount} p.` : ''}
+                              <span className="text-[10px] px-2 py-0.5 rounded-md font-mono font-semibold flex items-center space-x-1 bg-gray-800 text-gray-300">
+                                {item.type === 'VIDEO' ? (
+                                  <>
+                                    <Video className="w-3 h-3 text-purple-400" />
+                                    <span className="text-purple-300">VIDEO</span>
+                                  </>
+                                ) : item.type === 'AUDIO' ? (
+                                  <>
+                                    <Music className="w-3 h-3 text-emerald-400" />
+                                    <span className="text-emerald-300">AUDIO</span>
+                                  </>
+                                ) : item.type === 'IMAGE' ? (
+                                  <>
+                                    <ImageIcon className="w-3 h-3 text-cyan-400" />
+                                    <span className="text-cyan-300">DIAGRAM</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <FileText className="w-3 h-3 text-rose-400" />
+                                    <span className="text-rose-300">PDF / DOC</span>
+                                  </>
+                                )}
                               </span>
                             </div>
 
                             <div>
-                              <h4 className="font-bold text-sm text-white group-hover:text-blue-400 transition-colors">
+                              <h4 className="font-bold text-sm text-white group-hover:text-amber-400 transition-colors">
                                 {item.title}
                               </h4>
                               <p className="text-xs text-gray-400 mt-1 line-clamp-2 leading-relaxed">
-                                {item.topic}
+                                {item.description || item.topic || 'Class study notes and textbook references.'}
                               </p>
                             </div>
                           </div>
 
                           <div className="pt-3 border-t border-gray-800/80 flex items-center justify-between">
-                            <div className="text-[11px] text-gray-500 truncate max-w-[140px]">
-                              By <span className="text-gray-400">{item.authorTeacher}</span>
+                            <div className="text-[11px] text-gray-500 truncate max-w-[130px]">
+                              By <span className="text-gray-400">{item.authorTeacher || item.authorName || 'Teacher'}</span>
                             </div>
                             <button
                               onClick={() => setReadingMaterial(item)}
-                              className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold flex items-center space-x-1.5 cursor-pointer shadow-xs transition-colors"
+                              className="px-3.5 py-1.5 bg-amber-500 hover:bg-amber-400 text-gray-950 font-bold rounded-xl text-xs flex items-center space-x-1.5 cursor-pointer shadow-xs transition-colors"
                             >
-                              <Eye className="w-3.5 h-3.5" />
-                              <span>Read Notes</span>
+                              <Eye className="w-3.5 h-3.5 text-gray-950" />
+                              <span>
+                                {item.type === 'VIDEO' ? 'Watch Video' : item.type === 'AUDIO' ? 'Listen Audio' : item.type === 'IMAGE' ? 'View Diagram' : 'Read Notes'}
+                              </span>
                             </button>
                           </div>
                         </div>
@@ -1814,47 +2164,154 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
               </div>
             </div>
           ) : isBrowserOpen ? (
-            /* 5. APP: SAFE BROWSER */
+            /* 5. APP: REAL SAFE WEB BROWSER WITH EDUCATIONAL PORTAL & URL WHITELIST */
             <div className="flex-1 flex flex-col bg-gray-900 border border-gray-800 rounded-3xl overflow-hidden shadow-2xl">
-              <div className="p-3 bg-gray-950 border-b border-gray-800 flex items-center space-x-3">
-                <button onClick={() => setIsBrowserOpen(false)} className="p-2 text-gray-400 hover:text-white rounded-xl cursor-pointer">
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
-                <div className="flex-1 flex items-center bg-gray-900 border border-gray-700 rounded-xl px-3 py-1.5 text-xs">
-                  <Globe className="w-4 h-4 text-blue-400 mr-2 shrink-0" />
+              {/* Browser Navigation Toolbar */}
+              <div className="p-3 bg-gray-950 border-b border-gray-800 flex flex-wrap items-center gap-2">
+                <div className="flex items-center space-x-1">
+                  <button
+                    onClick={() => setIsBrowserOpen(false)}
+                    className="p-2 text-gray-400 hover:text-white rounded-xl cursor-pointer transition-colors"
+                    title="Close Browser and Return to Desk"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleBrowserBack}
+                    disabled={browserHistoryIndex <= 0}
+                    className={`p-2 rounded-xl transition-colors ${browserHistoryIndex > 0 ? 'text-gray-300 hover:text-white cursor-pointer' : 'text-gray-600 cursor-not-allowed'}`}
+                    title="Back"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleBrowserForward}
+                    disabled={browserHistoryIndex >= browserHistory.length - 1}
+                    className={`p-2 rounded-xl transition-colors ${browserHistoryIndex < browserHistory.length - 1 ? 'text-gray-300 hover:text-white cursor-pointer' : 'text-gray-600 cursor-not-allowed'}`}
+                    title="Forward"
+                  >
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleBrowserReload}
+                    className="p-2 text-gray-300 hover:text-white rounded-xl cursor-pointer transition-colors"
+                    title="Reload Page"
+                  >
+                    <RotateCcw className={`w-3.5 h-3.5 ${isBrowserLoading ? 'animate-spin text-blue-400' : ''}`} />
+                  </button>
+                  <button
+                    onClick={() => handleNavigate('https://en.wikipedia.org/wiki/Main_Page')}
+                    className="p-2 text-gray-300 hover:text-white rounded-xl cursor-pointer transition-colors"
+                    title="Home: Wikipedia Portal"
+                  >
+                    <Home className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Address Bar */}
+                <div className="flex-1 min-w-[240px] flex items-center bg-gray-900 border border-gray-700 rounded-xl px-3 py-1.5 text-xs">
+                  <div className="flex items-center space-x-1.5 mr-2 shrink-0">
+                    <Lock className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider hidden sm:inline">Safe</span>
+                  </div>
                   <input
                     type="text"
                     value={browserInput}
                     onChange={(e) => setBrowserInput(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleNavigate(browserInput)}
                     className="w-full bg-transparent text-white focus:outline-none text-xs font-mono"
-                    placeholder="Enter educational URL..."
+                    placeholder="Enter educational URL (e.g. en.wikipedia.org, khanacademy.org)..."
                   />
+                  {isBrowserLoading && (
+                    <span className="w-3 h-3 rounded-full border-2 border-blue-400 border-t-transparent animate-spin ml-2 shrink-0" />
+                  )}
                 </div>
+
                 <button
                   onClick={() => handleNavigate(browserInput)}
-                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                  className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-semibold cursor-pointer shadow-xs transition-colors"
                 >
                   Go
                 </button>
               </div>
 
-              <div className="flex-1 p-8 flex flex-col items-center justify-center text-center">
+              {/* Quick Educational Bookmarks Bar */}
+              <div className="px-3 py-1.5 bg-gray-950/80 border-b border-gray-800/80 flex items-center space-x-2 overflow-x-auto text-[11px] shrink-0">
+                <span className="text-gray-500 font-semibold flex items-center space-x-1 shrink-0">
+                  <Bookmark className="w-3 h-3 text-blue-400" />
+                  <span>Approved Portals:</span>
+                </span>
+                {[
+                  { name: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Main_Page' },
+                  { name: 'Khan Academy', url: 'https://www.khanacademy.org' },
+                  { name: 'NCERT Textbooks', url: 'https://ncert.nic.in/textbook.php' },
+                  { name: 'W3Schools Code', url: 'https://www.w3schools.com' },
+                  { name: 'Britannica Encyclopedia', url: 'https://www.britannica.com' },
+                ].map((item) => (
+                  <button
+                    key={item.name}
+                    onClick={() => handleNavigate(item.url)}
+                    className="px-2.5 py-0.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors whitespace-nowrap cursor-pointer"
+                  >
+                    {item.name}
+                  </button>
+                ))}
+              </div>
+
+              {/* Web Content View / Blocked Guard View */}
+              <div className="flex-1 relative bg-white overflow-hidden">
                 {browserBlocked ? (
-                  <div className="p-8 bg-rose-950/60 border border-rose-800 rounded-3xl max-w-md space-y-3 text-rose-300">
-                    <AlertOctagon className="w-12 h-12 text-rose-400 mx-auto" />
-                    <h3 className="font-bold text-lg text-white">Access Denied by School Web Filter</h3>
-                    <p className="text-xs leading-relaxed">
-                      Access to <code className="text-white font-mono">{browserUrl}</code> is blocked under Greenwood High School Safe Browsing Policy.
-                    </p>
+                  <div className="absolute inset-0 bg-gray-950 flex items-center justify-center p-6 text-center z-10">
+                    <div className="p-8 bg-rose-950/60 border border-rose-800 rounded-3xl max-w-md space-y-4 text-rose-200 shadow-2xl">
+                      <div className="w-16 h-16 rounded-2xl bg-rose-900/60 border border-rose-700/60 flex items-center justify-center mx-auto text-rose-400 shadow-inner">
+                        <AlertOctagon className="w-8 h-8 animate-pulse" />
+                      </div>
+                      <div className="space-y-2">
+                        <span className="px-3 py-0.5 bg-rose-900/80 text-rose-300 text-[10px] font-bold uppercase tracking-wider rounded-full border border-rose-700">
+                          EduGuard Security Filter
+                        </span>
+                        <h3 className="font-bold text-xl text-white">Access Denied by Safe Browsing Policy</h3>
+                        <p className="text-xs text-rose-300 leading-relaxed">
+                          {browserBlockedReason || `Access to "${browserUrl}" is blocked under School Child Safety & Anti-Distraction Policy.`}
+                        </p>
+                      </div>
+
+                      <div className="p-3 bg-gray-950/80 rounded-xl border border-rose-900/60 text-left space-y-1 text-xs text-gray-400 font-mono">
+                        <div>Attempted URL: <span className="text-rose-400 truncate">{browserUrl}</span></div>
+                        <div>Protection: Active Strict Kiosk Filter</div>
+                      </div>
+
+                      <div className="pt-2 flex flex-col space-y-2">
+                        <button
+                          onClick={() => handleNavigate('https://en.wikipedia.org/wiki/Main_Page')}
+                          className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs rounded-xl cursor-pointer transition-colors shadow-lg shadow-blue-600/20"
+                        >
+                          Return to Wikipedia Educational Portal
+                        </button>
+                        <button
+                          onClick={() => setIsBrowserOpen(false)}
+                          className="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-semibold rounded-xl cursor-pointer"
+                        >
+                          Return to Student Desktop
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 ) : (
-                  <div className="p-8 bg-gray-950 border border-gray-800 rounded-3xl max-w-md space-y-3 text-gray-300">
-                    <Globe className="w-12 h-12 text-blue-400 mx-auto" />
-                    <h3 className="font-bold text-lg text-white">Safe Educational Browser Active</h3>
-                    <p className="text-xs">
-                      Browsing allowed educational portal: <code className="text-blue-400 font-mono">{browserUrl}</code>
-                    </p>
+                  <div className="w-full h-full relative">
+                    {isBrowserLoading && (
+                      <div className="absolute inset-x-0 top-0 h-1 bg-gray-200 overflow-hidden z-20">
+                        <div className="h-full bg-blue-600 animate-pulse w-full" />
+                      </div>
+                    )}
+                    <iframe
+                      key={browserUrl}
+                      src={`/api/proxy-web?url=${encodeURIComponent(browserUrl)}`}
+                      className="w-full h-full border-0 bg-white"
+                      title="EduGuard Safe Web Portal"
+                      onLoad={() => setIsBrowserLoading(false)}
+                      sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+                    />
                   </div>
                 )}
               </div>

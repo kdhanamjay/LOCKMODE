@@ -444,7 +444,7 @@ export interface AdminBroadcastMessage {
   acknowledgedDeviceIds: string[];
 }
 
-export type StudyMaterialType = 'PDF' | 'RICH_NOTE' | 'WORKSHEET' | 'REFERENCE';
+export type StudyMaterialType = 'PDF' | 'VIDEO' | 'AUDIO' | 'IMAGE' | 'DOCUMENT' | 'RICH_NOTE' | 'WORKSHEET' | 'REFERENCE';
 
 export interface StudyMaterial {
   id: string;
@@ -456,7 +456,7 @@ export interface StudyMaterial {
   className: string; // e.g. 'Class XII-A' or 'All Classes'
   subject: string; // e.g. 'Mathematics', 'Physics', 'Chemistry', 'Biology', 'English', 'Computer Science'
   chapterOrUnit?: string;
-  fileUrl?: string; // Data URL (base64) or direct PDF link
+  fileUrl?: string; // Data URL (base64), blob, or direct media/PDF link
   fileName?: string;
   fileSizeBytes?: number;
   contentMarkdown?: string; // Rich notes content
@@ -465,6 +465,12 @@ export interface StudyMaterial {
   uploadedAt: string;
   allowOfflineDownload: boolean;
   viewCount: number;
+  // Compatibility aliases for student portal & readers
+  authorTeacher?: string;
+  topic?: string;
+  pageCount?: number;
+  fileType?: string;
+  content?: string;
 }
 
 

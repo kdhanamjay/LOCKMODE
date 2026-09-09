@@ -1219,6 +1219,209 @@ apiRouter.delete('/web-filter/rules/:id', (req: AuthenticatedRequest, res: Respo
   return sendSuccess(res, removed, 'Rule deleted.');
 });
 
+// Safe Web Portal Educational Reverse Proxy for Student Kiosk
+// Enables opening approved educational sites (Wikipedia, Khan Academy, Google Classroom, etc.)
+// inside the kiosk browser without X-Frame-Options or CSP frame-ancestor blocking.
+apiRouter.get('/proxy-web', async (req: AuthenticatedRequest, res: Response) => {
+  const rawUrl = req.query.url as string;
+  if (!rawUrl) {
+    return res.status(400).send('Missing url parameter');
+  }
+
+  let targetUrl = rawUrl.trim();
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(targetUrl);
+  } catch {
+    return res.status(400).send('Invalid target URL format.');
+  }
+
+  const hostname = parsedUrl.hostname.toLowerCase();
+
+  // 1. Check Web Filter Rules: Block rules first
+  const isExplicitlyBlocked = db.webFilterRules.some((r) => {
+    if (r.action === 'BLOCK') {
+      const pat = r.pattern.toLowerCase().trim();
+      return hostname.includes(pat) || targetUrl.toLowerCase().includes(pat);
+    }
+    return false;
+  });
+
+  if (isExplicitlyBlocked) {
+    // Log violation for telemetry
+    db.violations.unshift({
+      id: `viol-${Date.now()}`,
+      deviceId: 'kiosk-station',
+      deviceName: 'Student Workstation',
+      studentId: 'student',
+      studentName: 'Student Kiosk User',
+      className: 'Class XII-A',
+      schoolId: 'sch-demo-01',
+      type: 'BLOCKED_DOMAIN_ACCESSED',
+      severity: 'HIGH',
+      targetResource: targetUrl,
+      description: `Attempted access to blocked web filter domain: ${hostname}`,
+      timestamp: new Date().toISOString(),
+      isResolved: false,
+    });
+
+    return res.status(403).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>EduGuard Safe Web Filter - Access Restricted</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { background: #030712; color: #f9fafb; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+          .card { background: #111827; border: 1px solid #dc2626; border-radius: 20px; padding: 32px; max-width: 480px; text-align: center; box-shadow: 0 25px 50px -12px rgba(220, 38, 38, 0.25); }
+          .icon { font-size: 48px; margin-bottom: 16px; }
+          h2 { color: #f87171; margin: 0 0 8px 0; font-size: 20px; }
+          p { color: #9ca3af; font-size: 13px; line-height: 1.6; margin: 0 0 16px 0; }
+          code { background: #1f2937; color: #fca5a5; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px; }
+          .tag { display: inline-block; background: #450a0a; color: #fca5a5; border: 1px solid #7f1d1d; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: bold; margin-top: 8px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">🚫</div>
+          <h2>Website Blocked by School Policy</h2>
+          <p>Access to <code>${hostname}</code> is restricted on this student workstation under institutional safe browsing guidelines.</p>
+          <div class="tag">EduGuard Web Filter Guard</div>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  // 2. Check Allowed Domains:
+  // Explicit ALLOW rules in webFilterRules OR verified educational whitelist
+  const defaultAllowedDomains = [
+    'wikipedia.org',
+    'wikimedia.org',
+    'khanacademy.org',
+    'classroom.google.com',
+    'school.edu',
+    'ncert.nic.in',
+    'britannica.com',
+    'geeksforgeeks.org',
+    'w3schools.com',
+    'scratch.mit.edu',
+    'nationalgeographic.com',
+    'nasa.gov',
+    'archive.org',
+    'mathsisfun.com',
+    'wolframalpha.com',
+  ];
+
+  const allowedPatterns = [
+    ...defaultAllowedDomains,
+    ...db.webFilterRules.filter((r) => r.action === 'ALLOW').map((r) => r.pattern.toLowerCase().trim()),
+  ];
+
+  const isAllowed = allowedPatterns.some((pat) => {
+    return hostname === pat || hostname.endsWith('.' + pat);
+  });
+
+  if (!isAllowed) {
+    return res.status(403).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>EduGuard Safe Web Filter - Domain Not Whitelisted</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { background: #030712; color: #f9fafb; font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+          .card { background: #111827; border: 1px solid #374151; border-radius: 20px; padding: 32px; max-width: 480px; text-align: center; }
+          .icon { font-size: 48px; margin-bottom: 16px; }
+          h2 { color: #f59e0b; margin: 0 0 8px 0; font-size: 20px; }
+          p { color: #9ca3af; font-size: 13px; line-height: 1.6; margin: 0 0 16px 0; }
+          code { background: #1f2937; color: #fcd34d; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px; }
+          .tag { display: inline-block; background: #78350f; color: #fde68a; border: 1px solid #b45309; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: bold; margin-top: 8px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="icon">🔒</div>
+          <h2>Restricted Educational Whitelist</h2>
+          <p>The domain <code>${hostname}</code> is not on your institution's approved educational whitelist.</p>
+          <div class="tag">Safe Educational Browser Kiosk</div>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  // 3. Fetch and proxy the allowed site
+  try {
+    const response = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 EduGuard-Kiosk/2.5',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+
+    const contentType = response.headers.get('content-type') || 'text/html';
+
+    // Remove frame-blocking headers so it renders inside the student kiosk iframe
+    res.removeHeader('X-Frame-Options');
+    res.removeHeader('Content-Security-Policy');
+    res.setHeader('Content-Type', contentType);
+
+    if (contentType.includes('text/html')) {
+      let html = await response.text();
+      // Inject <base href="..."> so relative scripts, styles, and images work correctly
+      const baseTag = `<base href="${targetUrl}">`;
+      if (html.includes('<head>')) {
+        html = html.replace('<head>', `<head>${baseTag}`);
+      } else if (html.includes('<HEAD>')) {
+        html = html.replace('<HEAD>', `<HEAD>${baseTag}`);
+      } else {
+        html = baseTag + html;
+      }
+
+      // Inject navigation listener script to intercept links and keep browsing in kiosk portal
+      const navScript = `
+        <script>
+          (function() {
+            document.addEventListener('click', function(e) {
+              var link = e.target.closest('a');
+              if (link && link.href) {
+                e.preventDefault();
+                window.parent.postMessage({ type: 'EDUGUARD_SAFE_BROWSER_NAV', url: link.href }, '*');
+              }
+            }, true);
+          })();
+        </script>
+      `;
+      if (html.includes('</body>')) {
+        html = html.replace('</body>', `${navScript}</body>`);
+      } else {
+        html = html + navScript;
+      }
+
+      return res.send(html);
+    } else {
+      const buffer = await response.arrayBuffer();
+      return res.send(Buffer.from(buffer));
+    }
+  } catch (err: any) {
+    return res.status(502).send(`
+      <!DOCTYPE html>
+      <html>
+      <body style="background:#030712;color:#9ca3af;font-family:sans-serif;padding:30px;text-align:center;">
+        <h3 style="color:#f87171;">Failed to load educational portal</h3>
+        <p>Could not connect to ${hostname}: ${err.message || 'Network error'}</p>
+      </body>
+      </html>
+    `);
+  }
+});
+
 // -------------------------------------------------------------
 // 10. MONITORING: USAGE & VIOLATIONS
 // -------------------------------------------------------------
@@ -1574,6 +1777,12 @@ apiRouter.post('/study-materials', (req: AuthenticatedRequest, res: Response) =>
     uploadedAt: new Date().toISOString(),
     allowOfflineDownload: allowOfflineDownload !== undefined ? allowOfflineDownload : true,
     viewCount: 0,
+    // Client compatibility properties
+    authorTeacher: req.user?.name || 'Administrator',
+    topic: chapterOrUnit?.trim() || description?.trim() || 'General Learning Topic',
+    fileType: type || 'PDF',
+    pageCount: type === 'PDF' ? 1 : undefined,
+    content: contentMarkdown || description || 'Document content loaded.',
   };
 
   db.studyMaterials.unshift(newMaterial);
