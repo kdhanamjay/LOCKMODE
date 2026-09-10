@@ -33,6 +33,8 @@ import {
   Layers,
   Search,
   Download,
+  Printer,
+  Save,
   Eye,
   FileCode,
   GraduationCap,
@@ -363,9 +365,96 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   const [selectedSubject, setSelectedSubject] = useState<string>('ALL');
   const [studySearchQuery, setStudySearchQuery] = useState('');
   const [readingMaterial, setReadingMaterial] = useState<StudyMaterial | null>(null);
+  const readingMaterialRef = useRef<StudyMaterial | null>(null);
+  readingMaterialRef.current = readingMaterial;
+  const isMouseOverViewerRef = useRef(false);
+  const isViewerActionInProgressRef = useRef(false);
+  const isPrintingRef = useRef(false);
+  const pdfIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [isPdfExpanded, setIsPdfExpanded] = useState(false);
   const [pdfZoomLevel, setPdfZoomLevel] = useState<number>(100);
   const [videoPlaybackRate, setVideoPlaybackRate] = useState<number>(1);
   const [imageZoomLevel, setImageZoomLevel] = useState<number>(100);
+
+  // Safe handler to allow in-viewer PDF printing without triggering kiosk tab switch violations
+  const handlePrintMaterial = () => {
+    if (!readingMaterialRef.current) return;
+    const material = readingMaterialRef.current;
+    isViewerActionInProgressRef.current = true;
+    isPrintingRef.current = true;
+
+    setViolationToast(`🖨️ Opening print preview for "${material.title}"... (Permitted in Viewer)`);
+    setTimeout(() => setViolationToast(null), 3000);
+
+    try {
+      if (pdfIframeRef.current?.contentWindow) {
+        pdfIframeRef.current.contentWindow.focus();
+        pdfIframeRef.current.contentWindow.print();
+      } else if (material.fileUrl) {
+        const printFrame = document.createElement('iframe');
+        printFrame.style.position = 'fixed';
+        printFrame.style.right = '0';
+        printFrame.style.bottom = '0';
+        printFrame.style.width = '0';
+        printFrame.style.height = '0';
+        printFrame.style.border = '0';
+        printFrame.src = material.fileUrl;
+        printFrame.onload = () => {
+          try {
+            printFrame.contentWindow?.focus();
+            printFrame.contentWindow?.print();
+          } catch {
+            window.print();
+          }
+          setTimeout(() => {
+            try { printFrame.remove(); } catch {}
+            isViewerActionInProgressRef.current = false;
+            isPrintingRef.current = false;
+          }, 12000);
+        };
+        document.body.appendChild(printFrame);
+      } else {
+        window.print();
+      }
+    } catch {
+      window.print();
+    }
+
+    setTimeout(() => {
+      isViewerActionInProgressRef.current = false;
+      isPrintingRef.current = false;
+    }, 12000);
+  };
+
+  // Safe handler to allow in-viewer PDF saving / downloading without triggering kiosk tab switch violations
+  const handleDownloadMaterial = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
+    if (!readingMaterialRef.current) return;
+    const material = readingMaterialRef.current;
+    if (!material.fileUrl) return;
+
+    isViewerActionInProgressRef.current = true;
+    const safeTitle = (material.title || 'study_material').replace(/[^a-z0-9]/gi, '_');
+    const ext = material.fileType || (material.type === 'PDF' ? 'pdf' : 'dat');
+    const filename = material.fileName || `${safeTitle}.${ext}`;
+
+    const downloadUrl = material.fileUrl.startsWith('/api/study-materials/files/')
+      ? `${material.fileUrl}?download=1`
+      : material.fileUrl;
+
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setViolationToast(`📥 Saving "${material.title}" to local device storage... (Permitted in Viewer)`);
+    setTimeout(() => {
+      setViolationToast(null);
+      isViewerActionInProgressRef.current = false;
+    }, 4000);
+  };
 
   // Sync propMaterials automatically when updated from Admin Dashboard
   useEffect(() => {
@@ -518,10 +607,47 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         (e.ctrlKey && e.shiftKey && (e.key === 'I' || e.key === 'J' || e.key === 'C')) ||
         (e.ctrlKey && (e.key === 'u' || e.key === 'U'));
 
+      // Viewer Shortcut Allowance: If reading study materials, allow Ctrl+P (Print), Ctrl+S (Save/Download), Ctrl+=/Ctrl+- (Zoom)
+      if (readingMaterialRef.current) {
+        if (e.ctrlKey && (e.key === 'p' || e.key === 'P')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handlePrintMaterial();
+          return;
+        }
+        if (e.ctrlKey && (e.key === 's' || e.key === 'S')) {
+          e.preventDefault();
+          e.stopPropagation();
+          handleDownloadMaterial();
+          return;
+        }
+        if (e.ctrlKey && (e.key === '=' || e.key === '+')) {
+          e.preventDefault();
+          e.stopPropagation();
+          setPdfZoomLevel((prev) => Math.min(220, prev + 15));
+          setImageZoomLevel((prev) => Math.min(250, prev + 25));
+          return;
+        }
+        if (e.ctrlKey && (e.key === '-' || e.key === '_')) {
+          e.preventDefault();
+          e.stopPropagation();
+          setPdfZoomLevel((prev) => Math.max(60, prev - 15));
+          setImageZoomLevel((prev) => Math.max(50, prev - 25));
+          return;
+        }
+        if (e.ctrlKey && (e.key === '0')) {
+          e.preventDefault();
+          e.stopPropagation();
+          setPdfZoomLevel(100);
+          setImageZoomLevel(100);
+          return;
+        }
+      }
+
       // 5. Intercept System Browsing, New Windows, Printing: Ctrl+P, Ctrl+S, Ctrl+H, Ctrl+J, Ctrl+N, Ctrl+T, Ctrl+Shift+N, Ctrl+Shift+T
       const isBrowserShortcuts =
-        (e.ctrlKey && (e.key === 'p' || e.key === 'P')) ||
-        (e.ctrlKey && (e.key === 's' || e.key === 'S')) ||
+        (!readingMaterialRef.current && (e.ctrlKey && (e.key === 'p' || e.key === 'P'))) ||
+        (!readingMaterialRef.current && (e.ctrlKey && (e.key === 's' || e.key === 'S'))) ||
         (e.ctrlKey && (e.key === 'h' || e.key === 'H')) ||
         (e.ctrlKey && (e.key === 'j' || e.key === 'J')) ||
         (e.ctrlKey && (e.key === 'n' || e.key === 'N')) ||
@@ -607,15 +733,41 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     // 7. Window Blur (detect loss of window focus in Windows OS)
     const handleWindowBlur = () => {
       if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
-      // Immediately pull window focus back so student cannot switch out
-      try {
-        window.focus();
-        document.body.focus();
-      } catch {}
 
-      // Immediate check if document lost focus
+      // In-Viewer Allowance: When student interacts with PDF/media viewer
+      // (clicks zoom in/out, save, download, print, rotate, page scroll, or selects text),
+      // the embedded iframe/plugin or system print modal receives focus.
+      // These are authorized study actions and must NOT trigger "Tab Switching Detected" violations.
+      const activeEl = document.activeElement;
+      const isIframeFocused = activeEl && (activeEl.tagName === 'IFRAME' || activeEl.tagName === 'EMBED' || activeEl.tagName === 'OBJECT');
+      const isViewerInteraction =
+        isMouseOverViewerRef.current ||
+        isViewerActionInProgressRef.current ||
+        isPrintingRef.current ||
+        Boolean(readingMaterialRef.current) ||
+        Boolean(isIframeFocused);
+
+      if (isViewerInteraction) {
+        return;
+      }
+
+      // Check after a debounce whether focus was truly lost to another application
       setTimeout(() => {
         if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
+
+        const currentActive = document.activeElement;
+        const isCurrentIframe = currentActive && (currentActive.tagName === 'IFRAME' || currentActive.tagName === 'EMBED' || currentActive.tagName === 'OBJECT');
+        const stillInViewer =
+          isMouseOverViewerRef.current ||
+          isViewerActionInProgressRef.current ||
+          isPrintingRef.current ||
+          Boolean(readingMaterialRef.current) ||
+          Boolean(isCurrentIframe);
+
+        if (stillInViewer) {
+          return;
+        }
+
         if (!document.hasFocus() || document.hidden) {
           try {
             window.focus();
@@ -637,7 +789,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           setViolationToast('🚫 Window Switching Blocked: Switching between applications is disabled on this locked device!');
           setTimeout(() => setViolationToast(null), 3500);
         }
-      }, 100);
+      }, 150);
     };
 
     // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
@@ -667,7 +819,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           window.focus();
           document.body.focus();
         } catch {}
-      } else if (!isRemotelyUnlocked) {
+      } else if (!isRemotelyUnlocked && !isPrintingRef.current && !isViewerActionInProgressRef.current) {
         // Exited fullscreen while device locked: immediately alert and enforce
         triggerAlertSound();
         setTabSwitchCount((prev) => prev + 1);
@@ -683,6 +835,22 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       }
     };
 
+    // 11. Handle native print events (permits student in-viewer printing without security penalty)
+    const handleBeforePrint = () => {
+      isPrintingRef.current = true;
+      isViewerActionInProgressRef.current = true;
+    };
+    const handleAfterPrint = () => {
+      setTimeout(() => {
+        isPrintingRef.current = false;
+        isViewerActionInProgressRef.current = false;
+        try {
+          window.focus();
+          document.body.focus();
+        } catch {}
+      }, 1000);
+    };
+
     if (!isRemotelyUnlocked) {
       window.addEventListener('keydown', handleKeyDown, true);
       document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -690,6 +858,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       window.addEventListener('beforeunload', handleBeforeUnload);
       window.addEventListener('popstate', handlePopState);
       document.addEventListener('fullscreenchange', handleFullscreenChange);
+      window.addEventListener('beforeprint', handleBeforePrint);
+      window.addEventListener('afterprint', handleAfterPrint);
     }
 
     return () => {
@@ -699,6 +869,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('popstate', handlePopState);
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      window.removeEventListener('beforeprint', handleBeforePrint);
+      window.removeEventListener('afterprint', handleAfterPrint);
     };
   }, [currentDevice.id, currentDevice.deviceId, isRemotelyUnlocked]);
 
@@ -1737,23 +1909,36 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
                 {readingMaterial ? (
                   <div className="flex items-center space-x-2">
+                    {/* Status Pill indicating allowed actions */}
+                    <span className="hidden xl:inline-flex items-center space-x-1.5 px-2.5 py-1.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-medium rounded-xl">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Viewer Allowed: Zoom, Save, Download & Print</span>
+                    </span>
+
                     {/* Zoom / Playback controls depending on media type */}
                     {(readingMaterial.type === 'PDF' || readingMaterial.fileType === 'pdf') && (
                       <>
                         <button
                           onClick={() => setPdfZoomLevel((prev) => Math.max(70, prev - 15))}
-                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
-                          title="Zoom Out"
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer transition-colors"
+                          title="Zoom Out (Ctrl+-)"
                         >
                           <ZoomOut className="w-4 h-4" />
                         </button>
                         <span className="text-xs font-mono text-gray-300 w-12 text-center">{pdfZoomLevel}%</span>
                         <button
-                          onClick={() => setPdfZoomLevel((prev) => Math.min(180, prev + 15))}
-                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
-                          title="Zoom In"
+                          onClick={() => setPdfZoomLevel((prev) => Math.min(220, prev + 15))}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer transition-colors"
+                          title="Zoom In (Ctrl++)"
                         >
                           <ZoomIn className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setPdfZoomLevel(100)}
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl cursor-pointer text-xs transition-colors"
+                          title="Reset Zoom to 100% (Ctrl+0)"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
                         </button>
                       </>
                     )}
@@ -1762,7 +1947,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                       <>
                         <button
                           onClick={() => setImageZoomLevel((prev) => Math.max(50, prev - 25))}
-                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer transition-colors"
                           title="Zoom Out"
                         >
                           <ZoomOut className="w-4 h-4" />
@@ -1770,14 +1955,14 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                         <span className="text-xs font-mono text-gray-300 w-12 text-center">{imageZoomLevel}%</span>
                         <button
                           onClick={() => setImageZoomLevel((prev) => Math.min(250, prev + 25))}
-                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer"
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 rounded-xl cursor-pointer transition-colors"
                           title="Zoom In"
                         >
                           <ZoomIn className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => setImageZoomLevel(100)}
-                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl cursor-pointer text-xs"
+                          className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl cursor-pointer text-xs transition-colors"
                           title="Reset Zoom"
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
@@ -1785,16 +1970,36 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                       </>
                     )}
 
-                    {readingMaterial.fileUrl && (
-                      <a
-                        href={readingMaterial.fileUrl}
-                        download={`${readingMaterial.title.replace(/[^a-z0-9]/gi, '_')}.${readingMaterial.fileType || 'dat'}`}
-                        className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white rounded-xl cursor-pointer transition-colors"
-                        title="Download Offline Copy"
-                      >
-                        <Download className="w-4 h-4" />
-                      </a>
-                    )}
+                    {/* Print Document / PDF button */}
+                    <button
+                      onClick={handlePrintMaterial}
+                      className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 hover:text-white rounded-xl cursor-pointer transition-colors flex items-center space-x-1.5"
+                      title="Print Document / PDF Notes (Ctrl+P) - Permitted in Viewer"
+                    >
+                      <Printer className="w-4 h-4 text-sky-400" />
+                      <span className="text-xs font-medium hidden sm:inline">Print</span>
+                    </button>
+
+                    {/* Save / Download Offline button */}
+                    <button
+                      onClick={handleDownloadMaterial}
+                      className="p-2 bg-gray-800 hover:bg-gray-700 text-gray-200 hover:text-white rounded-xl cursor-pointer transition-colors flex items-center space-x-1.5"
+                      title="Save / Download Copy (Ctrl+S) - Permitted in Viewer"
+                    >
+                      <Save className="w-4 h-4 text-emerald-400" />
+                      <span className="text-xs font-medium hidden sm:inline">Save</span>
+                    </button>
+
+                    {/* Expand / Theater Toggle */}
+                    <button
+                      onClick={() => setIsPdfExpanded((prev) => !prev)}
+                      className={`p-2 rounded-xl cursor-pointer transition-colors ${
+                        isPdfExpanded ? 'bg-amber-500 text-gray-950 font-bold' : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                      }`}
+                      title={isPdfExpanded ? 'Exit Full Width View' : 'Expand Full Width View'}
+                    >
+                      {isPdfExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                    </button>
 
                     <button
                       onClick={() => setReadingMaterial(null)}
@@ -1978,15 +2183,55 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                           </div>
                         </div>
                       ) : (readingMaterial.type === 'PDF' || readingMaterial.fileType === 'pdf' || (readingMaterial.fileUrl && (readingMaterial.fileUrl.startsWith('data:application/pdf') || readingMaterial.fileUrl.includes('/study-materials/files/') || readingMaterial.fileUrl.toLowerCase().includes('.pdf')))) ? (
-                        /* 4. EMBEDDED PDF VIEWER */
+                        /* 4. EMBEDDED PDF VIEWER (WITH SECURE IN-VIEWER CONTROLS ALLOWANCE) */
                         <div
-                          className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl transition-all"
-                          style={{ height: `${Math.max(500, Math.min(850, 550 * (pdfZoomLevel / 100)))}px` }}
+                          onMouseEnter={() => { isMouseOverViewerRef.current = true; }}
+                          onMouseLeave={() => { isMouseOverViewerRef.current = false; }}
+                          className={`bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl transition-all relative ${
+                            isPdfExpanded ? 'fixed inset-4 z-[9990] bg-gray-950/98 flex flex-col p-4 border-2 border-amber-500/50' : ''
+                          }`}
+                          style={!isPdfExpanded ? { height: `${Math.max(550, Math.min(950, 600 * (pdfZoomLevel / 100)))}px` } : undefined}
                         >
+                          {isPdfExpanded && (
+                            <div className="flex items-center justify-between pb-3 mb-2 border-b border-gray-800 shrink-0">
+                              <div className="flex items-center space-x-2">
+                                <BookOpen className="w-4 h-4 text-amber-400" />
+                                <span className="font-bold text-sm text-white">{readingMaterial.title}</span>
+                                <span className="text-xs text-gray-400 font-mono">({pdfZoomLevel}% Zoom)</span>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  onClick={handlePrintMaterial}
+                                  className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded-xl flex items-center space-x-1.5 cursor-pointer"
+                                  title="Print Document"
+                                >
+                                  <Printer className="w-3.5 h-3.5 text-sky-400" />
+                                  <span>Print</span>
+                                </button>
+                                <button
+                                  onClick={handleDownloadMaterial}
+                                  className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-white text-xs font-semibold rounded-xl flex items-center space-x-1.5 cursor-pointer"
+                                  title="Save Offline Copy"
+                                >
+                                  <Save className="w-3.5 h-3.5 text-emerald-400" />
+                                  <span>Save Copy</span>
+                                </button>
+                                <button
+                                  onClick={() => setIsPdfExpanded(false)}
+                                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-gray-950 text-xs font-bold rounded-xl cursor-pointer"
+                                >
+                                  Exit Full Width
+                                </button>
+                              </div>
+                            </div>
+                          )}
                           <iframe
+                            ref={pdfIframeRef}
                             src={readingMaterial.fileUrl}
-                            className="w-full h-full border-0 bg-white"
+                            className="w-full flex-1 h-full border-0 bg-white"
                             title={readingMaterial.title}
+                            onMouseEnter={() => { isMouseOverViewerRef.current = true; }}
+                            onFocus={() => { isViewerActionInProgressRef.current = true; }}
                           />
                         </div>
                       ) : (
