@@ -137,16 +137,23 @@ export interface Application {
   iconUrl: string;
   category: 'EDUCATION' | 'PRODUCTIVITY' | 'COMMUNICATION' | 'UTILITY' | 'SYSTEM' | 'RESTRICTED';
   isApproved: boolean;
-  distributionType: 'MANAGED_GOOGLE_PLAY' | 'PRIVATE_ENTERPRISE_APK' | 'SYSTEM_PREINSTALLED';
+  distributionType: 'MANAGED_GOOGLE_PLAY' | 'PRIVATE_ENTERPRISE_APK' | 'SYSTEM_PREINSTALLED' | 'WINDOWS_EXE' | 'LOCAL_PC_APP';
   apkSizeMb?: number;
   apkUrl?: string;
-  targetSdk: number;
-  minSdk: number;
+  targetSdk?: number;
+  minSdk?: number;
   installedCount: number;
   pendingCount: number;
   failedCount: number;
   createdAt: string;
   updatedAt: string;
+  // PC & Installed App Extensions
+  isDesktopApp?: boolean;
+  isApprovedForStudent?: boolean;
+  exePath?: string;
+  protocolUri?: string;
+  launchCommand?: string;
+  description?: string;
 }
 
 export type DeploymentStatus = 'PENDING' | 'DOWNLOADING' | 'INSTALLING' | 'INSTALLED' | 'FAILED' | 'RETRYING';

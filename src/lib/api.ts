@@ -199,6 +199,16 @@ export const api = {
   getApplications: async () => fetchJson<Application[]>('/applications'),
   createApplication: async (data: Partial<Application>) =>
     fetchJson<Application>('/applications', { method: 'POST', body: JSON.stringify(data) }),
+  toggleAppStudentAccess: async (id: string, isApprovedForStudent?: boolean) =>
+    fetchJson<Application>(`/applications/${id}/toggle-student-access`, {
+      method: 'POST',
+      body: JSON.stringify({ isApprovedForStudent }),
+    }),
+  bulkUpdateAppStudentAccess: async (appIds: string[], enabled: boolean) =>
+    fetchJson<Application[]>('/applications/bulk-student-access', {
+      method: 'POST',
+      body: JSON.stringify({ appIds, enabled }),
+    }),
   deployApplication: async (id: string, target: { targetType: string; targetId: string; targetName: string }) =>
     fetchJson<Deployment>(`/applications/${id}/deploy`, {
       method: 'POST',

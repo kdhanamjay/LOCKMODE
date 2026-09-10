@@ -1122,7 +1122,67 @@ apiRouter.post('/applications', (req: AuthenticatedRequest, res: Response) => {
     status: 'SUCCESS',
   });
 
+  db.broadcast('application_created', newApp);
   return sendSuccess(res, newApp, 'Application registered.');
+});
+
+apiRouter.post('/applications/:id/toggle-student-access', (req: AuthenticatedRequest, res: Response) => {
+  const app = db.applications.find((a) => a.id === req.params.id || a.packageName === req.params.id);
+  if (!app) {
+    return sendError(res, 404, 'APP_NOT_FOUND', 'Application not found.');
+  }
+
+  const { isApprovedForStudent } = req.body;
+  app.isApprovedForStudent = isApprovedForStudent !== undefined ? isApprovedForStudent : !app.isApprovedForStudent;
+  app.updatedAt = new Date().toISOString();
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Admin',
+    adminRole: req.user?.role || 'SCHOOL_ADMIN',
+    schoolId: req.user?.schoolId || 'sch-demo-01',
+    action: 'UPDATE_APPLICATION',
+    targetType: 'APPLICATION',
+    targetId: app.id,
+    targetDescription: `${app.isApprovedForStudent ? 'Allowed' : 'Disallowed'} ${app.name} for student login workspace.`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  db.broadcast('application_update', app);
+  return sendSuccess(res, app, `Student access for ${app.name} updated.`);
+});
+
+apiRouter.post('/applications/bulk-student-access', (req: AuthenticatedRequest, res: Response) => {
+  const { appIds, enabled } = req.body;
+  if (!Array.isArray(appIds)) {
+    return sendError(res, 400, 'INVALID_INPUT', 'appIds must be an array of application IDs.');
+  }
+
+  const updated: any[] = [];
+  for (const app of db.applications) {
+    if (appIds.includes(app.id) || appIds.includes(app.packageName)) {
+      app.isApprovedForStudent = enabled !== undefined ? Boolean(enabled) : true;
+      app.updatedAt = new Date().toISOString();
+      updated.push(app);
+      db.broadcast('application_update', app);
+    }
+  }
+
+  db.addAuditLog({
+    adminId: req.user?.id || 'usr-admin-1',
+    adminName: req.user?.name || 'Admin',
+    adminRole: req.user?.role || 'SCHOOL_ADMIN',
+    schoolId: req.user?.schoolId || 'sch-demo-01',
+    action: 'BULK_UPDATE_APPLICATIONS',
+    targetType: 'APPLICATION',
+    targetId: 'bulk',
+    targetDescription: `Updated student workstation access for ${updated.length} applications.`,
+    ipAddress: req.ip || '127.0.0.1',
+    status: 'SUCCESS',
+  });
+
+  return sendSuccess(res, updated, `Updated student access for ${updated.length} applications.`);
 });
 
 apiRouter.post('/applications/:id/deploy', (req: AuthenticatedRequest, res: Response) => {

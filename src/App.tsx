@@ -245,6 +245,10 @@ export function App() {
               : m
           )
         );
+      } else if (eventType === 'application_update') {
+        setApplications((prev) => prev.map((a) => (a.id === data.id ? { ...a, ...data } : a)));
+      } else if (eventType === 'application_created') {
+        setApplications((prev) => [data, ...prev.filter((a) => a.id !== data.id)]);
       } else if (eventType === 'kiosk_exit_requested') {
         setExitRequests((prev) => [data, ...prev.filter((r) => r.id !== data.id)]);
         showToast(`🔑 Kiosk Exit Requested: ${data.studentName} (${data.deviceId})`, 'alert');
@@ -461,6 +465,31 @@ export function App() {
       showToast(`Application ${created.name} registered.`);
     } catch (e: any) {
       showToast(e.message || 'Failed to register app', 'alert');
+    }
+  };
+
+  const handleToggleAppStudentAccess = async (appId: string, enabled?: boolean) => {
+    try {
+      const updated = await api.toggleAppStudentAccess(appId, enabled);
+      setApplications((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
+      showToast(`${updated.name} ${updated.isApprovedForStudent ? 'enabled' : 'disabled'} for Student Login`);
+    } catch (e: any) {
+      showToast(e.message || 'Failed to update student access', 'alert');
+    }
+  };
+
+  const handleBulkUpdateStudentAccess = async (appIds: string[], enabled: boolean) => {
+    try {
+      const updatedList = await api.bulkUpdateAppStudentAccess(appIds, enabled);
+      setApplications((prev) =>
+        prev.map((a) => {
+          const matched = updatedList.find((u) => u.id === a.id);
+          return matched || a;
+        })
+      );
+      showToast(`Updated student login access for ${updatedList.length} applications`);
+    } catch (e: any) {
+      showToast(e.message || 'Failed to update student access', 'alert');
     }
   };
 
@@ -689,6 +718,8 @@ export function App() {
                 classes={classes}
                 onDeployApp={handleDeployApp}
                 onCreateApp={handleCreateApp}
+                onToggleStudentAccess={handleToggleAppStudentAccess}
+                onBulkUpdateStudentAccess={handleBulkUpdateStudentAccess}
               />
             )}
 

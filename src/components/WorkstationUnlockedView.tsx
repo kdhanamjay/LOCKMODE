@@ -16,9 +16,19 @@ export const WorkstationUnlockedView: React.FC<WorkstationUnlockedViewProps> = (
   unlockReason,
   onReopenKiosk,
 }) => {
-  // Attempt to automatically close the browser tab/window on mount
+  // Attempt to automatically exit fullscreen and close browser tab/window on mount
   useEffect(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+    if ('keyboard' in navigator && (navigator as any).keyboard?.unlock) {
+      (navigator as any).keyboard.unlock();
+    }
+
     const tryClose = () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
       try {
         window.open('', '_self', '');
         window.close();
@@ -32,11 +42,14 @@ export const WorkstationUnlockedView: React.FC<WorkstationUnlockedViewProps> = (
     tryClose();
 
     // Second attempt after brief delay
-    const t = setTimeout(tryClose, 1200);
+    const t = setTimeout(tryClose, 1000);
     return () => clearTimeout(t);
   }, []);
 
   const handleManualClose = () => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
     try {
       window.open('', '_self', '');
       window.close();

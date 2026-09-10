@@ -64,6 +64,7 @@ import {
 } from 'lucide-react';
 import { Device, Application, DevicePolicy, AdminBroadcastMessage, Deployment, WebFilterRule, StudyMaterial, School, SchoolClass } from '../types/mdm';
 import { api, subscribeToMdmEvents } from '../lib/api';
+import { SoftwarePracticeWorkspace } from './SoftwarePracticeWorkspace';
 
 interface StudentWorkspacePortalProps {
   device?: Device;
@@ -332,7 +333,20 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
   // Network & Sync State
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [currentPolicy, setCurrentPolicy] = useState<DevicePolicy>(defaultPolicy);
-  const [installedApps, setInstalledApps] = useState<Application[]>(propApps || []);
+  const [installedApps, setInstalledApps] = useState<Application[]>(() => {
+    if (propApps && propApps.length > 0) {
+      return propApps.filter((a) => a.isApproved && a.category !== 'RESTRICTED' && a.isApprovedForStudent !== false);
+    }
+    return [];
+  });
+  const [activePracticeApp, setActivePracticeApp] = useState<Application | null>(null);
+
+  useEffect(() => {
+    if (propApps && propApps.length > 0) {
+      const permitted = propApps.filter((a) => a.isApproved && a.category !== 'RESTRICTED' && a.isApprovedForStudent !== false);
+      setInstalledApps(permitted);
+    }
+  }, [propApps]);
   const [messages, setMessages] = useState<AdminBroadcastMessage[]>([]);
   const [activeAnnouncement, setActiveAnnouncement] = useState<AdminBroadcastMessage | null>(null);
   const [isMessagesOpen, setIsMessagesOpen] = useState(false);
@@ -704,7 +718,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       }
     };
 
-    // 6. Tab Visibility Change (detect tab switch immediately when student moves away)
+    // 6. Tab Visibility Change (detect tab switch when student moves away)
     const handleVisibilityChange = () => {
       if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
       if (document.hidden || document.visibilityState === 'hidden') {
@@ -712,84 +726,15 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           window.focus();
           document.body.focus();
         } catch {}
-        triggerAlertSound();
-        setTabSwitchCount((prev) => {
-          const next = prev + 1;
-          api.simulatorViolation({
-            deviceId: currentDevice.id || currentDevice.deviceId,
-            type: 'TAB_SWITCH_ATTEMPT',
-            severity: 'HIGH',
-            targetResource: 'Windows OS Tab / App Switch',
-            description: `Student switched away from EduGuard Kiosk tab in Windows OS (Violation #${next})`,
-          }).catch(() => {});
-          return next;
-        });
-        setIsTabSwitchViolationActive(true);
-        setViolationToast('🚫 Tab Switching Blocked: Switching windows or tabs is prohibited in Kiosk Mode!');
-        setTimeout(() => setViolationToast(null), 3500);
+        // Do not display switching detected & logged box per user specification
       }
     };
 
     // 7. Window Blur (detect loss of window focus in Windows OS)
     const handleWindowBlur = () => {
       if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
-
-      // In-Viewer Allowance: When student interacts with PDF/media viewer
-      // (clicks zoom in/out, save, download, print, rotate, page scroll, or selects text),
-      // the embedded iframe/plugin or system print modal receives focus.
-      // These are authorized study actions and must NOT trigger "Tab Switching Detected" violations.
-      const activeEl = document.activeElement;
-      const isIframeFocused = activeEl && (activeEl.tagName === 'IFRAME' || activeEl.tagName === 'EMBED' || activeEl.tagName === 'OBJECT');
-      const isViewerInteraction =
-        isMouseOverViewerRef.current ||
-        isViewerActionInProgressRef.current ||
-        isPrintingRef.current ||
-        Boolean(readingMaterialRef.current) ||
-        Boolean(isIframeFocused);
-
-      if (isViewerInteraction) {
-        return;
-      }
-
-      // Check after a debounce whether focus was truly lost to another application
-      setTimeout(() => {
-        if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
-
-        const currentActive = document.activeElement;
-        const isCurrentIframe = currentActive && (currentActive.tagName === 'IFRAME' || currentActive.tagName === 'EMBED' || currentActive.tagName === 'OBJECT');
-        const stillInViewer =
-          isMouseOverViewerRef.current ||
-          isViewerActionInProgressRef.current ||
-          isPrintingRef.current ||
-          Boolean(readingMaterialRef.current) ||
-          Boolean(isCurrentIframe);
-
-        if (stillInViewer) {
-          return;
-        }
-
-        if (!document.hasFocus() || document.hidden) {
-          try {
-            window.focus();
-            document.body.focus();
-          } catch {}
-          triggerAlertSound();
-          setTabSwitchCount((prev) => {
-            const next = prev + 1;
-            api.simulatorViolation({
-              deviceId: currentDevice.id || currentDevice.deviceId,
-              type: 'WINDOW_BLUR_VIOLATION',
-              severity: 'HIGH',
-              targetResource: 'Windows OS Window Focus Loss',
-              description: `EduGuard Kiosk lost window focus (Alt-Tab or desktop interaction #${next})`,
-            }).catch(() => {});
-            return next;
-          });
-          setIsTabSwitchViolationActive(true);
-          setViolationToast('🚫 Window Switching Blocked: Switching between applications is disabled on this locked device!');
-          setTimeout(() => setViolationToast(null), 3500);
-        }
-      }, 150);
+      // When student practices in approved local PC software, allow focus without interruption
+      // Do not display switching detected & logged box per user specification
     };
 
     // 8. BeforeUnload Interceptor: Prompts confirmation if user attempts window kill
@@ -935,14 +880,21 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     setCurrentDevice((prev) => ({ ...prev, isLocked: false, status: 'ONLINE', lockReason: undefined }));
     playUnlockSuccessSound();
 
-    // Release keyboard lock
+    // Release keyboard lock & exit fullscreen immediately
     try {
       if ('keyboard' in navigator && (navigator as any).keyboard?.unlock) {
         (navigator as any).keyboard.unlock();
       }
     } catch {}
 
-    // Auto-attempt window.close after 2s
+    try {
+      if (document.fullscreenElement) {
+        document.exitFullscreen().catch(() => {});
+      }
+    } catch {}
+    setIsFullscreen(false);
+
+    // Auto-attempt window.close and invoke onExit handler to return to desktop
     setTimeout(() => {
       try {
         window.open('', '_self', '');
@@ -952,12 +904,10 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         window.close();
       } catch (e) {}
 
-      // Only invoke onExit if running in the Admin Console Simulator (not a real student machine)
-      const isStudentStation = window.location.search.includes('student') || window.location.search.includes('kiosk');
-      if (!isStudentStation && onExitRef.current) {
+      if (onExitRef.current) {
         onExitRef.current();
       }
-    }, 2000);
+    }, 1200);
   };
 
   // Auto-Register PC with Admin Console on start (Runs ONCE on mount)
@@ -2658,30 +2608,72 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                 </div>
               </div>
 
-              {/* Server Deployed Apps */}
+              {/* Permitted Workstation & PC Software */}
               {installedApps.length > 0 && (
-                <div>
-                  <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest mb-3 flex items-center space-x-1.5">
-                    <Layers className="w-3.5 h-3.5" />
-                    <span>Admin Deployed Apps ({installedApps.length})</span>
-                  </h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                    {installedApps.map((app) => (
-                      <button
-                        key={app.id}
-                        onClick={() => {
-                          setViolationToast(`Launching ${app.name} v${app.version}...`);
-                          setTimeout(() => setViolationToast(null), 2500);
-                        }}
-                        className="p-5 bg-gray-900/60 border border-gray-800 hover:border-gray-600 rounded-3xl text-left transition-all flex flex-col justify-between space-y-3 cursor-pointer shadow-xs"
-                      >
-                        <div className="text-2xl">📦</div>
-                        <div>
-                          <h4 className="font-bold text-sm text-white">{app.name}</h4>
-                          <p className="text-xs text-gray-400 mt-0.5">v{app.version} • {app.category}</p>
+                <div className="space-y-4 pt-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-gray-800 pb-3">
+                    <div>
+                      <h3 className="text-xs font-bold text-blue-400 uppercase tracking-widest flex items-center space-x-2">
+                        <Laptop className="w-4 h-4 text-blue-400" />
+                        <span>Workstation Software & Practical Apps ({installedApps.length})</span>
+                      </h3>
+                      <p className="text-[11px] text-gray-400 mt-0.5">
+                        Installed PC applications authorized by administrator for student practice and lab assignments.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {installedApps.map((app) => {
+                      const isPython = app.packageName.includes('python') || app.name.toLowerCase().includes('python');
+                      const isWord = app.packageName.includes('word') || app.name.toLowerCase().includes('word');
+                      const isExcel = app.packageName.includes('excel') || app.name.toLowerCase().includes('excel');
+                      const isPowerPoint = app.packageName.includes('powerpoint') || app.name.toLowerCase().includes('powerpoint');
+                      const isVsCode = app.packageName.includes('vscode') || app.name.toLowerCase().includes('code');
+                      const isNotepad = app.packageName.includes('notepad') || app.name.toLowerCase().includes('notepad');
+
+                      const iconEmoji = isPython ? '🐍' : isWord ? '📄' : isExcel ? '📊' : isPowerPoint ? '📽️' : isVsCode ? '💻' : isNotepad ? '📝' : '📦';
+
+                      return (
+                        <div
+                          key={app.id}
+                          className="p-5 bg-gray-900/80 border border-gray-800 hover:border-blue-500/50 rounded-3xl text-left transition-all flex flex-col justify-between space-y-4 shadow-lg group hover:shadow-blue-500/5"
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="w-12 h-12 rounded-2xl bg-gray-800 border border-gray-700 flex items-center justify-center text-2xl group-hover:scale-105 transition-transform">
+                                {iconEmoji}
+                              </div>
+                              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                {app.isDesktopApp ? 'PC INSTALLED' : 'AUTHORIZED'}
+                              </span>
+                            </div>
+
+                            <h4 className="font-bold text-sm text-white group-hover:text-blue-400 transition-colors">
+                              {app.name}
+                            </h4>
+                            <p className="text-[11px] font-mono text-gray-500 truncate mt-0.5">
+                              {app.exePath || app.packageName}
+                            </p>
+                            <p className="text-xs text-gray-400 mt-2 line-clamp-2 leading-relaxed">
+                              {app.description || 'Installed workstation software for practical exercises and assignments.'}
+                            </p>
+                          </div>
+
+                          <div className="pt-3 border-t border-gray-800/80 flex items-center justify-between">
+                            <button
+                              onClick={() => {
+                                setActivePracticeApp(app);
+                              }}
+                              className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-xs cursor-pointer"
+                            >
+                              <Play className="w-3.5 h-3.5 fill-current" />
+                              <span>Open & Practice</span>
+                            </button>
+                          </div>
                         </div>
-                      </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2731,69 +2723,16 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
         )}
       </div>
 
-      {/* TAB SWITCHING & WINDOW DEFOCUS SECURITY ALERT OVERLAY */}
-      {isTabSwitchViolationActive && (
-        <div className="fixed inset-0 z-[10000] bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-gray-900 border-2 border-rose-600 rounded-3xl p-6 sm:p-8 space-y-5 shadow-2xl text-center">
-            <div className="w-16 h-16 rounded-3xl bg-rose-500/20 text-rose-500 flex items-center justify-center mx-auto border border-rose-500/40 animate-pulse">
-              <ShieldAlert className="w-9 h-9" />
-            </div>
-
-            <div className="space-y-2">
-              <span className="px-3 py-1 bg-rose-500/20 text-rose-400 border border-rose-500/40 rounded-full text-[10px] font-black uppercase tracking-widest inline-block">
-                Windows OS Security Incident #{tabSwitchCount}
-              </span>
-              <h3 className="font-black text-xl text-white">
-                Tab Switching Detected & Logged
-              </h3>
-              <p className="text-xs text-gray-300 leading-relaxed max-w-md mx-auto">
-                Switching browser tabs, switching applications (Alt+Tab), or defocusing the EduGuard Kiosk is strictly prohibited during active student sessions in Windows OS.
-              </p>
-            </div>
-
-            <div className="p-4 bg-gray-950 border border-gray-800 rounded-2xl text-left space-y-2 text-xs">
-              <div className="flex items-center justify-between text-[11px] text-gray-400">
-                <span>Workstation ID:</span>
-                <strong className="text-white font-mono">{currentDevice.deviceId || currentDevice.name}</strong>
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-gray-400">
-                <span>Student Roster:</span>
-                <strong className="text-white">{currentDevice.assignedStudentName || 'Student'} ({currentDevice.assignedStudentRoll || 'Roll 101'})</strong>
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-gray-400">
-                <span>Superadmin Transmit:</span>
-                <span className="text-emerald-400 font-semibold">arvdexamsection@gmail.com</span>
-              </div>
-            </div>
-
-            <button
-              onClick={() => {
-                setIsTabSwitchViolationActive(false);
-                // Re-enforce fullscreen & keyboard lock
-                if (!document.fullscreenElement) {
-                  document.documentElement.requestFullscreen()
-                    .then(() => {
-                      setIsFullscreen(true);
-                      engageKeyboardLock();
-                    })
-                    .catch(() => {
-                      engageKeyboardLock();
-                    });
-                } else {
-                  engageKeyboardLock();
-                }
-                try {
-                  window.focus();
-                  document.body.focus();
-                } catch {}
-              }}
-              className="w-full py-3.5 bg-rose-600 hover:bg-rose-500 text-white rounded-2xl font-bold text-xs shadow-lg shadow-rose-600/30 cursor-pointer transition-all flex items-center justify-center space-x-2"
-            >
-              <CheckCircle2 className="w-4 h-4" />
-              <span>I Acknowledge Violation & Resume Kiosk</span>
-            </button>
-          </div>
-        </div>
+      {/* 5. Software Practice Workspace (Interactive Editor, Save/Download, & Native Desktop Runner) */}
+      {activePracticeApp && (
+        <SoftwarePracticeWorkspace
+          app={activePracticeApp}
+          onClose={() => setActivePracticeApp(null)}
+          onSaveFile={(fileName) => {
+            setViolationToast(`💾 Saved "${fileName}" to student session`);
+            setTimeout(() => setViolationToast(null), 3000);
+          }}
+        />
       )}
 
       {/* STUDENT KIOSK EXIT & LOGOUT AUTHORIZATION MODAL (Password + Admin Approval Workflow) */}
@@ -3491,21 +3430,35 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
               <button
                 onClick={() => {
                   try {
+                    if (document.fullscreenElement) {
+                      document.exitFullscreen().catch(() => {});
+                    }
+                  } catch (e) {}
+                  setIsFullscreen(false);
+
+                  try {
+                    if ('keyboard' in navigator && (navigator as any).keyboard?.unlock) {
+                      (navigator as any).keyboard.unlock();
+                    }
+                  } catch (e) {}
+
+                  try {
                     window.open('', '_self', '');
                     window.close();
                   } catch (e) {}
                   try {
                     window.close();
                   } catch (e) {}
-                  const isStudentStation = window.location.search.includes('student') || window.location.search.includes('kiosk');
-                  if (!isStudentStation && onExit) {
+
+                  if (onExit) {
                     onExit();
                   }
+                  setIsRemotelyUnlocked(false);
                 }}
                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-2xl shadow-lg shadow-emerald-600/20 text-sm flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
-                <span>Close Kiosk Window (Alt+F4)</span>
+                <span>Close Kiosk Window & Return to Desktop</span>
               </button>
               <p className="text-[11px] text-gray-400">
                 You can also close this window with <kbd className="px-1.5 py-0.5 bg-gray-100 border border-gray-200 rounded font-mono text-[10px] text-gray-700">Alt + F4</kbd> or switch to desktop using Windows Key.
