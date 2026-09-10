@@ -282,6 +282,15 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     onExitRef.current = onExit;
   }, [onExit]);
 
+  // Initial startup stabilization grace period (prevents false blur/unlock during browser boot)
+  const isStartupGracePeriodRef = useRef(true);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      isStartupGracePeriodRef.current = false;
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, []);
+
   const defaultPolicy: DevicePolicy = propPolicy || {
     id: 'pol-std-kiosk',
     name: 'Classroom Kiosk Standard',
@@ -571,7 +580,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
     // 6. Tab Visibility Change (detect tab switch immediately when student moves away)
     const handleVisibilityChange = () => {
-      if (isRemotelyUnlocked) return;
+      if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
       if (document.hidden || document.visibilityState === 'hidden') {
         try {
           window.focus();
@@ -597,7 +606,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
     // 7. Window Blur (detect loss of window focus in Windows OS)
     const handleWindowBlur = () => {
-      if (isRemotelyUnlocked) return;
+      if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
       // Immediately pull window focus back so student cannot switch out
       try {
         window.focus();
@@ -606,7 +615,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
       // Immediate check if document lost focus
       setTimeout(() => {
-        if (isRemotelyUnlocked) return;
+        if (isRemotelyUnlocked || isStartupGracePeriodRef.current) return;
         if (!document.hasFocus() || document.hidden) {
           try {
             window.focus();
@@ -742,7 +751,11 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     }
   };
 
-  const handleRemoteUnlock = (reason?: string) => {
+  const handleRemoteUnlock = (reason?: string, force = false) => {
+    if (isStartupGracePeriodRef.current && !force && exitRequestStatus !== 'APPROVED') {
+      console.warn('Ignored premature unlock during kiosk startup grace period');
+      return;
+    }
     setIsScreenLockedByAdmin(false);
     setIsRemotelyUnlocked(true);
     setExitRequestStatus('APPROVED');
@@ -836,8 +849,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.');
           return;
         }
-        if (status && status.isLocked === false && cur.isLocked) {
-          handleRemoteUnlock('Administrator unlocked this workstation from Admin Console.');
+        if (!isStartupGracePeriodRef.current && status && status.isLocked === false && cur.isLocked && status.status === 'ONLINE') {
+          handleRemoteUnlock('Administrator unlocked this workstation from Admin Console.', true);
         } else if (status && status.isLocked === true && status.status === 'LOCKED' && !cur.isLocked) {
           handleRemoteLock(status.lockReason || 'Administrator placed this device under security lockdown.');
         }
@@ -938,8 +951,8 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
       } else if (eventType === 'device_update') {
         if (data.id === curDev.id || data.deviceId === curDev.deviceId) {
           setCurrentDevice((prev) => ({ ...prev, ...data }));
-          if (data.isLocked === false && curDev.isLocked) {
-            handleRemoteUnlock('Administrator unlocked this device remotely.');
+          if (!isStartupGracePeriodRef.current && data.isLocked === false && curDev.isLocked) {
+            handleRemoteUnlock('Administrator unlocked this device remotely.', true);
           } else if (data.isLocked === true && !curDev.isLocked) {
             handleRemoteLock(data.lockReason || 'Administrator has placed this device under security lockdown.');
           }
@@ -960,7 +973,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
           data.id === curDev.id ||
           data.id === curDev.deviceId;
         if (matchesDevice) {
-          handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.');
+          handleRemoteUnlock('This workstation was unenrolled and deleted by Administrator.', true);
         }
       } else if (eventType === 'kiosk_exit_approved' || eventType === 'device_unlocked') {
         const matchesDevice =
@@ -972,7 +985,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
 
         if (matchesDevice) {
           setExitRequestStatus('APPROVED');
-          handleRemoteUnlock(data.reason || data.reviewNote || 'Administrator approved kiosk exit.');
+          handleRemoteUnlock(data.reason || data.reviewNote || 'Administrator approved kiosk exit.', true);
         }
       } else if (eventType === 'kiosk_exit_rejected') {
         const matchesDevice =
@@ -1115,10 +1128,26 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     let clean = input.trim();
     if (!clean) return;
 
-    // Convert search terms or raw queries into Wikipedia Search
+    // Ignore pure intra-page anchors and empty hash/void links
+    if (clean === '#' || clean.startsWith('#') || clean.startsWith('javascript:')) {
+      return;
+    }
+
+    // Convert search terms, relative paths, or full URLs
     let targetUrl = clean;
     if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
-      if (clean.includes('.') && !clean.includes(' ')) {
+      // Check if it's a relative path on the active page (e.g. /html/default.asp or html_intro.asp)
+      if (browserUrl && (clean.startsWith('/') || clean.startsWith('./') || clean.startsWith('../') || !clean.includes(' '))) {
+        try {
+          targetUrl = new URL(clean, browserUrl).href;
+        } catch {
+          if (clean.includes('.') && !clean.includes(' ')) {
+            targetUrl = `https://${clean}`;
+          } else {
+            targetUrl = `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(clean)}`;
+          }
+        }
+      } else if (clean.includes('.') && !clean.includes(' ')) {
         targetUrl = `https://${clean}`;
       } else {
         // Query search
@@ -1215,16 +1244,23 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
     }, 50);
   };
 
+  const handleNavigateRef = useRef(handleNavigate);
+  useEffect(() => {
+    handleNavigateRef.current = handleNavigate;
+  });
+
   // Listen for inner navigation clicks from our safe proxy
   useEffect(() => {
     const handleProxyMessage = (event: MessageEvent) => {
       if (event.data && event.data.type === 'EDUGUARD_SAFE_BROWSER_NAV' && event.data.url) {
-        handleNavigate(event.data.url, true);
+        if (handleNavigateRef.current) {
+          handleNavigateRef.current(event.data.url, true);
+        }
       }
     };
     window.addEventListener('message', handleProxyMessage);
     return () => window.removeEventListener('message', handleProxyMessage);
-  }, [browserHistoryIndex]);
+  }, []);
 
   // Admin / Teacher PIN Unlock (Quick Local Override)
   const handleAdminUnlock = () => {
@@ -1941,7 +1977,7 @@ export const StudentWorkspacePortal: React.FC<StudentWorkspacePortalProps> = ({
                             <span>High-Resolution Teacher Graphic</span>
                           </div>
                         </div>
-                      ) : (readingMaterial.fileUrl && readingMaterial.fileUrl.startsWith('data:application/pdf')) ? (
+                      ) : (readingMaterial.type === 'PDF' || readingMaterial.fileType === 'pdf' || (readingMaterial.fileUrl && (readingMaterial.fileUrl.startsWith('data:application/pdf') || readingMaterial.fileUrl.includes('/study-materials/files/') || readingMaterial.fileUrl.toLowerCase().includes('.pdf')))) ? (
                         /* 4. EMBEDDED PDF VIEWER */
                         <div
                           className="bg-gray-900 border border-gray-800 rounded-2xl overflow-hidden shadow-2xl transition-all"

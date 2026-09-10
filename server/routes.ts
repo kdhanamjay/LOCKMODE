@@ -1,6 +1,8 @@
 // EduGuard MDM — Comprehensive REST API Route Handlers
 
-import { Router, Response } from 'express';
+import { Router, Response, Request } from 'express';
+import fs from 'fs';
+import path from 'path';
 import { db, generateMacAddress, generateUniqueStationPassword } from './db';
 import { AuthenticatedRequest, sendSuccess, sendError, requireRole } from './auth';
 import { Device, RemoteCommand, PolicyViolation, AppUsageRecord, WebFilterRule } from '../src/types/mdm';
@@ -318,8 +320,8 @@ apiRouter.post('/devices/enroll', (req: AuthenticatedRequest, res: Response) => 
       osVersion: osVersion || 'Windows 11 / Android 15',
       agentVersion: '1.4.2',
       managementMode: 'DEVICE_OWNER',
-      status: 'ONLINE',
-      isLocked: false,
+      status: 'LOCKED',
+      isLocked: true,
       schoolId: targetSchool.id,
       schoolName: targetSchool.name,
       classId: targetClass.id,
@@ -585,6 +587,11 @@ apiRouter.post('/devices/checkin', (req: AuthenticatedRequest, res: Response) =>
     if (wifiSsid) device.wifiSsid = wifiSsid;
     if (platform && (!device.platform || (device.platform as string) === 'UNKNOWN')) device.platform = platform;
     if (model && (!device.model || device.model === 'Unknown')) device.model = model;
+    if (isLocked !== undefined) {
+      device.isLocked = isLocked;
+    } else if (device.isLocked === undefined) {
+      device.isLocked = true;
+    }
     device.status = device.isLocked ? 'LOCKED' : 'ONLINE';
 
     db.broadcast('device_update', device);
@@ -738,19 +745,22 @@ apiRouter.get('/devices/:id/kiosk-status', (req: AuthenticatedRequest, res: Resp
         isLocked: wasDeleted ? false : true,
         kioskActive: wasDeleted ? false : true,
         isDeleted: wasDeleted,
-        status: wasDeleted ? 'UNENROLLED' : 'PENDING_REGISTRATION',
+        status: wasDeleted ? 'UNENROLLED' : 'LOCKED',
       },
     });
   }
+
+  const isLocked = device.isLocked !== undefined ? device.isLocked : true;
+
   return res.json({
     success: true,
     data: {
       id: device.id,
       deviceId: device.deviceId,
-      isLocked: !!device.isLocked,
-      kioskActive: !!device.isLocked,
+      isLocked: isLocked,
+      kioskActive: isLocked,
       status: device.status,
-      kioskMode: device.kioskMode,
+      kioskMode: device.kioskMode || 'FULL_LOCKDOWN',
       lastHeartbeat: device.lastHeartbeat,
     },
   });
@@ -1374,12 +1384,14 @@ apiRouter.get('/proxy-web', async (req: AuthenticatedRequest, res: Response) => 
 
     if (contentType.includes('text/html')) {
       let html = await response.text();
-      // Inject <base href="..."> so relative scripts, styles, and images work correctly
-      const baseTag = `<base href="${targetUrl}">`;
-      if (html.includes('<head>')) {
-        html = html.replace('<head>', `<head>${baseTag}`);
-      } else if (html.includes('<HEAD>')) {
-        html = html.replace('<HEAD>', `<HEAD>${baseTag}`);
+      const finalTargetUrl = response.url || targetUrl;
+
+      // Inject <base href="..."> so relative scripts, styles, and images resolve to origin
+      const baseTag = `<base href="${finalTargetUrl}">`;
+      const headIdx = html.toLowerCase().indexOf('<head>');
+      if (headIdx !== -1) {
+        const insertHeadPos = html.indexOf('>', headIdx) + 1;
+        html = html.slice(0, insertHeadPos) + baseTag + html.slice(insertHeadPos);
       } else {
         html = baseTag + html;
       }
@@ -1388,20 +1400,65 @@ apiRouter.get('/proxy-web', async (req: AuthenticatedRequest, res: Response) => 
       const navScript = `
         <script>
           (function() {
+            var currentBaseUrl = ${JSON.stringify(finalTargetUrl)};
+            
             document.addEventListener('click', function(e) {
               var link = e.target.closest('a');
-              if (link && link.href) {
-                e.preventDefault();
-                window.parent.postMessage({ type: 'EDUGUARD_SAFE_BROWSER_NAV', url: link.href }, '*');
+              if (!link) return;
+
+              var rawHref = link.getAttribute('href');
+              // Allow intra-page anchors, menu toggles, and void JS triggers to function normally
+              if (!rawHref || rawHref === '#' || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) {
+                return;
               }
+
+              try {
+                var resolvedUrl = new URL(rawHref, currentBaseUrl).href;
+                if (resolvedUrl.startsWith('http://') || resolvedUrl.startsWith('https://')) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  window.parent.postMessage({ type: 'EDUGUARD_SAFE_BROWSER_NAV', url: resolvedUrl }, '*');
+                }
+              } catch (err) {
+                if (link.href && (link.href.startsWith('http://') || link.href.startsWith('https://'))) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  window.parent.postMessage({ type: 'EDUGUARD_SAFE_BROWSER_NAV', url: link.href }, '*');
+                }
+              }
+            }, true);
+
+            // Intercept form submissions (e.g. search bars on educational sites)
+            document.addEventListener('submit', function(e) {
+              var form = e.target.closest('form');
+              if (!form) return;
+              var rawAction = form.getAttribute('action') || '';
+              try {
+                var formUrl = new URL(rawAction, currentBaseUrl);
+                var formData = new FormData(form);
+                for (var pair of formData.entries()) {
+                  formUrl.searchParams.append(pair[0], pair[1]);
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                window.parent.postMessage({ type: 'EDUGUARD_SAFE_BROWSER_NAV', url: formUrl.href }, '*');
+              } catch (err) {}
             }, true);
           })();
         </script>
       `;
-      if (html.includes('</body>')) {
-        html = html.replace('</body>', `${navScript}</body>`);
+
+      // Safely insert before the last closing </body> or </html> to avoid corrupting inline JS
+      const lastBodyIdx = html.toLowerCase().lastIndexOf('</body>');
+      if (lastBodyIdx !== -1) {
+        html = html.slice(0, lastBodyIdx) + navScript + html.slice(lastBodyIdx);
       } else {
-        html = html + navScript;
+        const lastHtmlIdx = html.toLowerCase().lastIndexOf('</html>');
+        if (lastHtmlIdx !== -1) {
+          html = html.slice(0, lastHtmlIdx) + navScript + html.slice(lastHtmlIdx);
+        } else {
+          html = html + navScript;
+        }
       }
 
       return res.send(html);
@@ -1758,6 +1815,51 @@ apiRouter.post('/study-materials', (req: AuthenticatedRequest, res: Response) =>
     return sendError(res, 400, 'VALIDATION_ERROR', 'Title, subject, and target class are required.');
   }
 
+  let finalFileUrl = fileUrl || undefined;
+  let finalSizeBytes = fileSizeBytes || (type === 'PDF' ? 1024000 : 45000);
+
+  // If fileUrl is a base64 Data URL, extract and persist it to uploads directory
+  if (typeof fileUrl === 'string' && fileUrl.startsWith('data:')) {
+    try {
+      const uploadsDir = path.join(process.cwd(), 'uploads', 'study-materials');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      const match = fileUrl.match(/^data:([a-zA-Z0-9/.-]+);base64,(.+)$/);
+      if (match) {
+        const mimeType = match[1].toLowerCase();
+        const base64Data = match[2];
+        const buffer = Buffer.from(base64Data, 'base64');
+        finalSizeBytes = buffer.length;
+
+        // Determine proper file extension
+        let ext = '.bin';
+        if (mimeType.includes('pdf')) ext = '.pdf';
+        else if (mimeType.includes('mp4')) ext = '.mp4';
+        else if (mimeType.includes('webm')) ext = '.webm';
+        else if (mimeType.includes('mp3') || mimeType.includes('mpeg')) ext = '.mp3';
+        else if (mimeType.includes('wav')) ext = '.wav';
+        else if (mimeType.includes('png')) ext = '.png';
+        else if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = '.jpg';
+        else if (mimeType.includes('webp')) ext = '.webp';
+        else if (mimeType.includes('word') || mimeType.includes('doc')) ext = '.doc';
+        else if (fileName && path.extname(fileName)) ext = path.extname(fileName).toLowerCase();
+
+        const safePrefix = `mat-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        const diskFileName = `${safePrefix}${ext}`;
+        const diskPath = path.join(uploadsDir, diskFileName);
+
+        fs.writeFileSync(diskPath, buffer);
+        finalFileUrl = `/api/study-materials/files/${diskFileName}`;
+        console.log(`[Study Materials] File saved to disk: ${diskPath} (${finalSizeBytes} bytes)`);
+      }
+    } catch (diskErr) {
+      console.error('[Study Materials Upload] Failed to write file to disk, using data URL fallback:', diskErr);
+      finalFileUrl = fileUrl;
+    }
+  }
+
   const newMaterial = {
     id: `mat-${Date.now()}`,
     title: title.trim(),
@@ -1768,9 +1870,9 @@ apiRouter.post('/study-materials', (req: AuthenticatedRequest, res: Response) =>
     className: className || (classId === 'ALL' ? 'All Classes' : (db.classes.find((c) => c.id === classId)?.name || 'Classroom')),
     subject: subject.trim(),
     chapterOrUnit: chapterOrUnit?.trim() || 'General',
-    fileUrl: fileUrl || undefined,
+    fileUrl: finalFileUrl,
     fileName: fileName || (type === 'PDF' ? `${title.replace(/\s+/g, '_')}.pdf` : undefined),
-    fileSizeBytes: fileSizeBytes || (type === 'PDF' ? 1024000 : 45000),
+    fileSizeBytes: finalSizeBytes,
     contentMarkdown: contentMarkdown || (type === 'RICH_NOTE' ? `# ${title}\n\n${description || ''}` : undefined),
     authorName: req.user?.name || 'Administrator',
     authorRole: req.user?.role || 'TEACHER',
@@ -1804,6 +1906,71 @@ apiRouter.post('/study-materials', (req: AuthenticatedRequest, res: Response) =>
   return sendSuccess(res, newMaterial, 'Study material / PDF uploaded successfully and dispatched to student devices.');
 });
 
+// Direct streaming & download endpoint for study materials (supports byte ranges for audio/video & PDFs)
+apiRouter.get('/study-materials/files/:filename', (req: Request, res: Response) => {
+  const filename = path.basename(req.params.filename);
+  const filePath = path.join(process.cwd(), 'uploads', 'study-materials', filename);
+
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send('Study material file not found on server.');
+  }
+
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  const ext = path.extname(filename).toLowerCase();
+
+  const mimeMap: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.ogg': 'video/ogg',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.m4a': 'audio/m4a',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.svg': 'image/svg+xml',
+    '.gif': 'image/gif',
+    '.doc': 'application/msword',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.xls': 'application/vnd.ms-excel',
+    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    '.ppt': 'application/vnd.ms-powerpoint',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.txt': 'text/plain',
+  };
+
+  const contentType = mimeMap[ext] || 'application/octet-stream';
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+
+  const range = req.headers.range;
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    const chunksize = end - start + 1;
+    const fileStream = fs.createReadStream(filePath, { start, end });
+    res.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+      'Content-Length': chunksize,
+      'Content-Type': contentType,
+    });
+    fileStream.pipe(res);
+  } else {
+    res.setHeader('Content-Length', fileSize);
+    if (req.query.download === '1') {
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    } else {
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    }
+    fs.createReadStream(filePath).pipe(res);
+  }
+});
+
 apiRouter.delete('/study-materials/:id', (req: AuthenticatedRequest, res: Response) => {
   const index = db.studyMaterials.findIndex((m) => m.id === req.params.id);
   if (index === -1) {
@@ -1812,6 +1979,19 @@ apiRouter.delete('/study-materials/:id', (req: AuthenticatedRequest, res: Respon
 
   const [removed] = db.studyMaterials.splice(index, 1);
   db.broadcast('study_material_deleted', { id: req.params.id });
+
+  // If material had a disk-persisted file, clean it up
+  if (removed.fileUrl && removed.fileUrl.startsWith('/api/study-materials/files/')) {
+    const fn = path.basename(removed.fileUrl);
+    const fp = path.join(process.cwd(), 'uploads', 'study-materials', fn);
+    if (fs.existsSync(fp)) {
+      try {
+        fs.unlinkSync(fp);
+      } catch (cleanupErr) {
+        console.warn('[Study Materials] Could not remove file on deletion:', cleanupErr);
+      }
+    }
+  }
 
   db.addAuditLog({
     adminId: req.user?.id || 'usr-admin-1',

@@ -147,11 +147,14 @@ if exist "%LOCALAPPDATA%\\EduGuardKiosk\\EduGuard-KeyBlocker.ps1" (
 )
 start "" "!BROWSER_EXE!" --kiosk "!TARGET_URL!" --edge-kiosk-type=fullscreen --user-data-dir="%DATA_DIR%" --no-first-run --no-default-browser-check --disable-background-mode --disable-features=msEdgeStartupBoost,TranslateUI,InterestFeedContentSuggestions --disable-pinch --kiosk-printing
 
+:: Initial startup stabilization delay to allow window to launch cleanly
+timeout /t 6 /nobreak >nul
+
 :MONITOR_LOOP
-timeout /t 2 /nobreak >nul
+timeout /t 3 /nobreak >nul
 
 :: Check if administrator unlocked or deleted this specific workstation from the Admin Console
-powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.isLocked -eq $false -or $r.data.kioskActive -eq $false) { exit 1 } else { exit 0 } } catch { exit 0 }" >nul 2>&1
+powershell -NoProfile -Command "try { $r = (Invoke-RestMethod -Uri '${currentAppUrl}/api/devices/!DEV_ID!/kiosk-status' -TimeoutSec 4); if ($r.data.isDeleted -eq $true) { exit 2 } else if ($r.data.status -eq 'ONLINE' -and $r.data.isLocked -eq $false) { exit 1 } else { exit 0 } } catch { exit 0 }" >nul 2>&1
 set "STATUS_CODE=!errorlevel!"
 
 if !STATUS_CODE! equ 2 (
@@ -719,6 +722,9 @@ If Err.Number <> 0 Then
 End If
 Err.Clear
 
+' Initial startup delay: give Edge window and registration 6 seconds to settle before monitoring
+WScript.Sleep 6000
+
 Do While True
     WScript.Sleep 3000
 
@@ -748,7 +754,8 @@ Do While True
                 WshShell.Run "taskkill /f /fi ""WINDOWTITLE eq EduGuard-KeyBlocker*""", 0, True
                 WScript.Quit 0
             End If
-            If InStr(resp, """isLocked"":false") > 0 Or InStr(resp, """kioskActive"":false") > 0 Then
+            ' Only unlock if explicitly marked ONLINE and isLocked: false (prevents premature unlock during boot)
+            If InStr(resp, """status"":""ONLINE""") > 0 And InStr(resp, """isLocked"":false") > 0 Then
                 ' WORKSTATION UNLOCKED / APPROVED BY ADMINISTRATOR!
                 WshShell.Run "taskkill /f /im msedge.exe", 0, True
                 WshShell.Run "taskkill /f /im chrome.exe", 0, True

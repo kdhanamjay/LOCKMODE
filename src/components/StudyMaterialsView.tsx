@@ -28,6 +28,7 @@ import {
   Music,
   Image as ImageIcon,
   Play,
+  Loader2,
 } from 'lucide-react';
 import { StudyMaterial, SchoolClass, AdminUser, StudyMaterialType } from '../types/mdm';
 
@@ -74,6 +75,8 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
   const [uploadContentMarkdown, setUploadContentMarkdown] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileDataUrl, setFileDataUrl] = useState<string | null>(null);
+  const [isReadingFile, setIsReadingFile] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -121,9 +124,13 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
     return 'DOCUMENT';
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processSelectedFile = (file: File) => {
+    // 100MB limit check
+    const MAX_SIZE = 100 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      setErrorMsg(`The selected file is ${(file.size / (1024 * 1024)).toFixed(1)} MB, which exceeds the 100 MB upload limit. Please select a smaller file or compress it.`);
+      return;
+    }
 
     setSelectedFile(file);
     const detected = detectFileType(file);
@@ -134,15 +141,26 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
       setUploadTitle(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
     }
 
+    setIsReadingFile(true);
+    setErrorMsg(null);
+
     const reader = new FileReader();
     reader.onload = (event) => {
       setFileDataUrl(event.target?.result as string);
+      setIsReadingFile(false);
     };
     reader.onerror = () => {
-      setErrorMsg('Could not read selected file.');
+      setErrorMsg('Could not read the selected file. Please try again or choose another file.');
+      setIsReadingFile(false);
     };
     reader.readAsDataURL(file);
-    setErrorMsg(null);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSelectedFile(file);
+    }
   };
 
   // Demo sample media loaders for quick testing
@@ -203,6 +221,17 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
     setErrorMsg(null);
 
     try {
+      let resolvedDataUrl = fileDataUrl;
+      // If user selected file and reader is still pending, wait for it
+      if (selectedFile && !resolvedDataUrl) {
+        resolvedDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (ev) => resolve(ev.target?.result as string);
+          reader.onerror = () => reject(new Error('Failed to read selected file'));
+          reader.readAsDataURL(selectedFile);
+        });
+      }
+
       const selectedClass = classes.find((c) => c.id === uploadClassId);
       const targetClassName = uploadClassId === 'ALL' ? 'All Classes' : selectedClass?.name || 'Classroom';
 
@@ -222,7 +251,7 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
         chapterOrUnit: uploadChapter.trim() || 'Unit 1',
         fileName: selectedFile?.name || `${uploadTitle.replace(/\s+/g, '_')}.${fileExt}`,
         fileSizeBytes: selectedFile?.size || 2048000,
-        fileUrl: fileDataUrl || undefined,
+        fileUrl: resolvedDataUrl || undefined,
         contentMarkdown: uploadType === 'RICH_NOTE' ? uploadContentMarkdown : undefined,
         allowOfflineDownload: true,
       });
@@ -721,8 +750,29 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                   </label>
                   <div
                     onClick={() => fileInputRef.current?.click()}
-                    className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-colors ${
-                      selectedFile || fileDataUrl
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDragging(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDragging(false);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDragging(false);
+                      const droppedFile = e.dataTransfer.files?.[0];
+                      if (droppedFile) {
+                        processSelectedFile(droppedFile);
+                      }
+                    }}
+                    className={`border-2 border-dashed rounded-2xl p-6 text-center cursor-pointer transition-all ${
+                      isDragging
+                        ? 'border-indigo-500 bg-indigo-50/60 scale-[1.01]'
+                        : selectedFile || fileDataUrl
                         ? 'border-emerald-300 bg-emerald-50/40'
                         : 'border-gray-300 hover:border-gray-400 bg-gray-50/60'
                     }`}
@@ -734,7 +784,13 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                       onChange={handleFileChange}
                       className="hidden"
                     />
-                    {selectedFile ? (
+                    {isReadingFile ? (
+                      <div className="space-y-2 py-2">
+                        <Loader2 className="w-6 h-6 text-indigo-600 animate-spin mx-auto" />
+                        <div className="text-xs font-semibold text-gray-800">Processing file for upload...</div>
+                        <div className="text-[10px] text-gray-500">Preparing high-resolution file buffers</div>
+                      </div>
+                    ) : selectedFile ? (
                       <div className="flex items-center justify-center space-x-2 text-emerald-800">
                         <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                         <div>
@@ -753,8 +809,10 @@ export const StudyMaterialsView: React.FC<StudyMaterialsViewProps> = ({
                     ) : (
                       <div className="space-y-1.5">
                         <Upload className="w-6 h-6 text-gray-400 mx-auto" />
-                        <div className="font-semibold text-gray-800 text-xs">Click to browse or drop any file here</div>
-                        <div className="text-[10px] text-gray-400">PDF, Videos (MP4/WebM), Audio (MP3/WAV), Images, Docs supported</div>
+                        <div className="font-semibold text-gray-800 text-xs">
+                          {isDragging ? 'Drop file here to upload' : 'Click to browse or drag & drop any file here'}
+                        </div>
+                        <div className="text-[10px] text-gray-400">PDF, Videos (MP4/WebM), Audio (MP3/WAV), Images, Docs supported (up to 100MB)</div>
                       </div>
                     )}
                   </div>

@@ -36,9 +36,23 @@ async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T>
     },
   });
 
-  const json = await response.json();
+  const rawText = await response.text();
+  let json: any;
+  try {
+    json = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    if (response.status === 413) {
+      throw new Error('The file you are uploading exceeds the maximum allowed size (100MB). Please choose a smaller file.');
+    }
+    // Clean any HTML tags that might be in an error page from a proxy
+    const cleanSnippet = rawText.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(
+      cleanSnippet || `Server returned a non-JSON response (${response.status} ${response.statusText}).`
+    );
+  }
+
   if (!response.ok || !json.success) {
-    throw new Error(json?.error?.message || 'API request failed');
+    throw new Error(json?.error?.message || `API request failed with status ${response.status}`);
   }
   return json.data;
 }
